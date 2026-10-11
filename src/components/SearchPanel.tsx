@@ -4,14 +4,13 @@ import { SearchCriteria } from '../types';
 interface SearchPanelProps {
   onSearch: (criteria: SearchCriteria) => void;
   isSearching: boolean;
-  initialCriteria: SearchCriteria;
 }
 
-export default function SearchPanel({ onSearch, isSearching, initialCriteria }: SearchPanelProps) {
+export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps) {
   const [query, setQuery] = useState('');
-  const [type, setType] = useState(initialCriteria.type);
-  const [sortBy, setSortBy] = useState(initialCriteria.sortBy);
-  const [maxResults, setMaxResults] = useState(initialCriteria.maxResults);
+  const [type, setType] = useState('group');
+  const [sortBy, setSortBy] = useState('relevance');
+  const [maxResults, setMaxResults] = useState(50);
   const [showAdvanced, setShowAdvanced] = useState(false);
 
   const handleSearch = () => {
@@ -127,9 +126,9 @@ export default function SearchPanel({ onSearch, isSearching, initialCriteria }: 
             <input
               type="number"
               value={maxResults}
-              onChange={(e) => setMaxResults(Math.min(1000, Math.max(10, parseInt(e.target.value) || 10)))}
-              min={10}
-              max={1000}
+              onChange={(e) => setMaxResults(Math.min(200, Math.max(5, parseInt(e.target.value) || 5)))}
+              min={5}
+              max={200}
               className="w-full bg-black/30 border border-white/20 rounded-lg px-3 py-2.5 text-white focus:outline-none focus:border-blue-500"
             />
           </div>
@@ -139,7 +138,7 @@ export default function SearchPanel({ onSearch, isSearching, initialCriteria }: 
       {/* Quick search suggestions */}
       <div className="mt-4 flex flex-wrap gap-2">
         <span className="text-white/50 text-sm">Быстрый поиск:</span>
-        {['Автосервис', 'Доставка еды', 'Салон красоты', 'Фитнес', 'Ремонт квартир', 'Стоматология'].map((suggestion) => (
+        {['Автосервис', 'Доставка еды', 'Салон красоты', 'Фитнес', 'Ремонт квартир', 'Стоматология', 'Юридические услуги', 'Бухгалтерия'].map((suggestion) => (
           <button
             key={suggestion}
             onClick={() => setQuery(suggestion)}
