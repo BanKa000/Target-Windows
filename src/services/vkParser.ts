@@ -1,6 +1,9 @@
 import { Community, SearchCriteria } from '../types';
 
-// CORS прокси для обхода ограничений браузера
+// Определяем, запущены ли мы в Electron
+const isElectron = !!(window as any).electronAPI || navigator.userAgent.includes('Electron');
+
+// CORS прокси для браузерной версии (fallback)
 const CORS_PROXIES = [
   'https://api.allorigins.win/raw?url=',
   'https://corsproxy.io/?',
@@ -18,9 +21,41 @@ function rotateProxy(): void {
   currentProxyIndex++;
 }
 
-async function fetchWithProxy(url: string, retries = 3): Promise<string> {
+// Загрузка страницы - в Electron напрямую, в браузере через прокси
+async function fetchPage(url: string, retries = 3): Promise<string> {
   let lastError: Error | null = null;
   
+  // В Electron пробуем прямой запрос
+  if (isElectron) {
+    try {
+      const response = await fetch(url, {
+        headers: {
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'ru-RU,ru;q=0.9,en;q=0.8',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
+        },
+        credentials: 'include',
+      });
+      
+      if (!response.ok) {
+        throw new Error(`Ошибка загрузки страницы (код ${response.status})`);
+      }
+      
+      const text = await response.text();
+      
+      if (text.includes('captcha') || text.includes('Капчу')) {
+        throw new Error('VK запросил капчу. Подождите 1-2 минуты и попробуйте снова.');
+      }
+      
+      return text;
+    } catch (err: unknown) {
+      const message = err instanceof Error ? err.message : 'Неизвестная ошибка';
+      console.warn('Прямой запрос не удался, пробуем через прокси:', message);
+      // Если прямой запрос не удался, пробуем через прокси
+    }
+  }
+  
+  // Fallback: через CORS прокси (для браузера)
   for (let i = 0; i < retries; i++) {
     try {
       const proxyUrl = getProxyUrl(url);
@@ -57,10 +92,11 @@ export async function searchCommunities(criteria: SearchCriteria): Promise<Commu
   const query = encodeURIComponent(criteria.query);
   const tabParam = criteria.type === 'page' ? 'publics' : criteria.type === 'event' ? 'events' : 'groups';
   
+  // URL поиска на VK
   const searchUrl = `https://vk.com/communities?q=${query}&section=communities&tab=${tabParam}`;
   
   try {
-    const html = await fetchWithProxy(searchUrl);
+    const html = await fetchPage(searchUrl);
     
     // Сначала пробуем парсить JSON из скриптов
     let communities = parseJsonFromHtml(html);
@@ -215,40 +251,6 @@ function parseJsonFromHtml(html: string): Community[] {
     }
   }
   
-  // Также ищем данные в формате VK "cur" или "search"
-  const curPattern = /var\s+search\s*=\s*(\{[\s\S]*?\});/;
-  const curMatch = html.match(curPattern);
-  if (curMatch) {
-    try {
-      const data = JSON.parse(curMatch[1]);
-      if (data.rows && Array.isArray(data.rows)) {
-        for (const row of data.rows) {
-          const nameMatch = row.match(/href="\/([^"]+)"[^>]*>([^<]+)</);
-          if (nameMatch) {
-            communities.push({
-              id: hashCode(nameMatch[1]),
-              name: decodeHtml(nameMatch[2].trim()),
-              screen_name: nameMatch[1],
-              type: 'group',
-              description: '',
-              members_count: 0,
-              photo_200: '',
-              site: '',
-              phone: '',
-              email: '',
-              status: '',
-              verified: false,
-              is_closed: 0,
-              activity: '',
-            });
-          }
-        }
-      }
-    } catch {
-      // пропускаем
-    }
-  }
-  
   return communities;
 }
 
@@ -257,7 +259,7 @@ export async function fetchCommunityDetails(screenName: string): Promise<Partial
   const url = `https://vk.com/${screenName}`;
   
   try {
-    const html = await fetchWithProxy(url);
+    const html = await fetchPage(url);
     const details: Partial<Community> = {};
     
     // Извлекаем телефон
@@ -280,7 +282,6 @@ export async function fetchCommunityDetails(screenName: string): Promise<Partial
     const emailMatch = html.match(/([\w.+-]+@[\w.-]+\.\w{2,})/);
     if (emailMatch) {
       const email = emailMatch[1];
-      // Фильтруем email из VK
       if (!email.includes('vk.com') && !email.includes('vk.ru')) {
         details.email = email;
       }

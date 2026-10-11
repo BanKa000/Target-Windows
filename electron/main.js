@@ -1,10 +1,28 @@
-const { app, BrowserWindow, Menu } = require('electron');
+const { app, BrowserWindow, Menu, session } = require('electron');
 const path = require('path');
 
 // Отключаем аппаратное ускорение для лучшей совместимости
 app.disableHardwareAcceleration();
 
 let mainWindow;
+
+// Настраиваем сессию для обхода CORS
+function setupSession() {
+  session.defaultSession.webRequest.onHeadersReceived((details, callback) => {
+    // Удаляем CSP заголовки, которые могут блокировать запросы
+    delete details.responseHeaders['Content-Security-Policy'];
+    delete details.responseHeaders['content-security-policy'];
+    delete details.responseHeaders['X-Frame-Options'];
+    delete details.responseHeaders['x-frame-options'];
+    
+    callback({ responseHeaders: details.responseHeaders });
+  });
+
+  // Разрешаем все запросы
+  session.defaultSession.setPermissionRequestHandler((webContents, permission, callback) => {
+    callback(true);
+  });
+}
 
 function createWindow() {
   // Создаём окно браузера
@@ -19,9 +37,10 @@ function createWindow() {
       nodeIntegration: false,
       contextIsolation: true,
       webSecurity: false, // Разрешаем CORS для работы с VK
+      allowRunningInsecureContent: true,
       preload: path.join(__dirname, 'preload.js')
     },
-    autoHideMenuBar: true, // Скрываем меню по умолчанию
+    autoHideMenuBar: true,
     show: false
   });
 
@@ -29,10 +48,8 @@ function createWindow() {
   const isDev = process.env.NODE_ENV === 'development';
   
   if (isDev) {
-    // В режиме разработки загружаем с localhost
     mainWindow.loadURL('http://localhost:3000');
   } else {
-    // В production загружаем локальный файл
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'));
   }
 
@@ -42,13 +59,18 @@ function createWindow() {
   });
 
   // Открываем DevTools в режиме разработки
-  if (process.env.NODE_ENV === 'development') {
+  if (isDev) {
     mainWindow.webContents.openDevTools();
   }
 
   // Обработчик закрытия окна
   mainWindow.on('closed', () => {
     mainWindow = null;
+  });
+
+  // Логируем ошибки
+  mainWindow.webContents.on('did-fail-load', (event, errorCode, errorDescription) => {
+    console.error('Ошибка загрузки:', errorCode, errorDescription);
   });
 }
 
@@ -60,17 +82,13 @@ const template = [
       {
         label: 'Обновить',
         accelerator: 'CmdOrCtrl+R',
-        click: () => {
-          mainWindow.reload();
-        }
+        click: () => mainWindow.reload()
       },
       { type: 'separator' },
       {
         label: 'Выход',
         accelerator: 'CmdOrCtrl+Q',
-        click: () => {
-          app.quit();
-        }
+        click: () => app.quit()
       }
     ]
   },
@@ -80,23 +98,17 @@ const template = [
       {
         label: 'Перезагрузить',
         accelerator: 'CmdOrCtrl+Shift+R',
-        click: () => {
-          mainWindow.reload();
-        }
+        click: () => mainWindow.reload()
       },
       {
         label: 'Полноэкранный режим',
         accelerator: 'F11',
-        click: () => {
-          mainWindow.setFullScreen(!mainWindow.isFullScreen());
-        }
+        click: () => mainWindow.setFullScreen(!mainWindow.isFullScreen())
       },
       {
         label: 'Инструменты разработчика',
         accelerator: 'F12',
-        click: () => {
-          mainWindow.webContents.toggleDevTools();
-        }
+        click: () => mainWindow.webContents.toggleDevTools()
       }
     ]
   },
@@ -122,6 +134,8 @@ const template = [
 
 // Когда Electron готов
 app.whenReady().then(() => {
+  setupSession();
+  
   const menu = Menu.buildFromTemplate(template);
   Menu.setApplicationMenu(menu);
   
