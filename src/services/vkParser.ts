@@ -31,7 +31,7 @@ async function fetchWithProxy(url: string, retries = 3): Promise<string> {
       });
       
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        throw new Error(`Ошибка загрузки страницы (код ${response.status}). CORS-прокси может быть недоступен.`);
       }
       
       const text = await response.text();
