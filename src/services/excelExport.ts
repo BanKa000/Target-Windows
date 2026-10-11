@@ -24,7 +24,7 @@ export function exportToExcel(communities: Community[], filename?: string) {
 
   const worksheet = XLSX.utils.json_to_sheet(data);
   
-  // Set column widths
+  // Ширина столбцов
   const colWidths = [
     { wch: 5 },   // №
     { wch: 10 },  // ID
@@ -48,7 +48,7 @@ export function exportToExcel(communities: Community[], filename?: string) {
   const workbook = XLSX.utils.book_new();
   XLSX.utils.book_append_sheet(workbook, worksheet, 'Сообщества');
 
-  // Add summary sheet
+  // Добавляем лист сводки
   const summaryData = [
     { 'Параметр': 'Всего сообществ', 'Значение': communities.length },
     { 'Параметр': 'Дата экспорта', 'Значение': new Date().toLocaleString('ru-RU') },

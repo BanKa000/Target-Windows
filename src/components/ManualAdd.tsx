@@ -195,7 +195,7 @@ export default function ManualAdd({ onAdd, searchedIds }: ManualAddProps) {
         </button>
       </div>
 
-      {/* Single add */}
+      {/* Добавление одного сообщества */}
       <div className="flex gap-3">
         <div className="flex-1">
           <input
@@ -235,7 +235,7 @@ export default function ManualAdd({ onAdd, searchedIds }: ManualAddProps) {
         <p className="mt-2 text-red-400 text-sm">{error}</p>
       )}
 
-      {/* Batch mode */}
+      {/* Массовое добавление */}
       <div className="mt-4 pt-4 border-t border-white/10">
         <button 
           onClick={() => setShowBatch(!showBatch)}

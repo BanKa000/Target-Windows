@@ -8,7 +8,7 @@ interface StatsPanelProps {
 export default function StatsPanel({ totalCommunities, searchCount, onExport, onClear }: StatsPanelProps) {
   return (
     <div className="grid grid-cols-1 md:grid-cols-4 gap-4 mb-6">
-      {/* Total communities */}
+      {/* Всего сообществ */}
       <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-xl p-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-blue-500/20 rounded-lg flex items-center justify-center">
@@ -23,7 +23,7 @@ export default function StatsPanel({ totalCommunities, searchCount, onExport, on
         </div>
       </div>
 
-      {/* Search count */}
+      {/* Количество поисков */}
       <div className="bg-white/5 backdrop-blur-lg border border-white/10 rounded-xl p-4">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 bg-purple-500/20 rounded-lg flex items-center justify-center">
@@ -38,7 +38,7 @@ export default function StatsPanel({ totalCommunities, searchCount, onExport, on
         </div>
       </div>
 
-      {/* Export button */}
+      {/* Кнопка экспорта */}
       <button
         onClick={onExport}
         disabled={totalCommunities === 0}
@@ -57,7 +57,7 @@ export default function StatsPanel({ totalCommunities, searchCount, onExport, on
         </div>
       </button>
 
-      {/* Clear button */}
+      {/* Кнопка очистки */}
       <button
         onClick={onClear}
         disabled={totalCommunities === 0}

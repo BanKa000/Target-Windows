@@ -39,7 +39,7 @@ export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps)
         Критерии поиска
       </h2>
 
-      {/* Main search */}
+      {/* Основной поиск */}
       <div className="flex gap-3 mb-4">
         <div className="flex-1 relative">
           <svg className="absolute left-4 top-1/2 -translate-y-1/2 w-5 h-5 text-white/40" fill="none" stroke="currentColor" viewBox="0 0 24 24">
@@ -79,7 +79,7 @@ export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps)
         </button>
       </div>
 
-      {/* Advanced settings toggle */}
+      {/* Переключатель расширенных настроек */}
       <button
         onClick={() => setShowAdvanced(!showAdvanced)}
         className="text-blue-400 hover:text-blue-300 text-sm flex items-center gap-1 mb-4 transition-colors"
@@ -90,10 +90,10 @@ export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps)
         Расширенные настройки
       </button>
 
-      {/* Advanced settings */}
+      {/* Расширенные настройки */}
       {showAdvanced && (
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4 p-4 bg-black/20 rounded-xl border border-white/5">
-          {/* Type filter */}
+          {/* Фильтр по типу */}
           <div>
             <label className="block text-white/70 text-sm mb-2">Тип сообщества</label>
             <select
@@ -107,7 +107,7 @@ export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps)
             </select>
           </div>
 
-          {/* Sort */}
+          {/* Сортировка */}
           <div>
             <label className="block text-white/70 text-sm mb-2">Сортировка</label>
             <select
@@ -120,7 +120,7 @@ export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps)
             </select>
           </div>
 
-          {/* Max results */}
+          {/* Максимум результатов */}
           <div>
             <label className="block text-white/70 text-sm mb-2">Макс. результатов</label>
             <input
@@ -135,7 +135,7 @@ export default function SearchPanel({ onSearch, isSearching }: SearchPanelProps)
         </div>
       )}
 
-      {/* Quick search suggestions */}
+      {/* Быстрый поиск */}
       <div className="mt-4 flex flex-wrap gap-2">
         <span className="text-white/50 text-sm">Быстрый поиск:</span>
         {['Автосервис', 'Доставка еды', 'Салон красоты', 'Фитнес', 'Ремонт квартир', 'Стоматология', 'Юридические услуги', 'Бухгалтерия'].map((suggestion) => (
