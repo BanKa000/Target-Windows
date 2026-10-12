@@ -2,12 +2,6 @@
 # -*- coding: utf-8 -*-
 """
 VK Community Finder - Поиск сообществ ВКонтакте
-Десктопное приложение для Windows
-
-Решение проблемы "Cannot switch to a different thread":
-- Playwright создаётся ВНУТРИ каждого рабочего потока
-- Cookies сохраняются на диск через persistent_context
-- Авторизация делается один раз, потом переиспользуется
 """
 
 import sys
@@ -19,10 +13,10 @@ from typing import List, Dict
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QTableWidget, QTableWidgetItem, 
-                             QProgressBar, QMessageBox, QGroupBox, QSpinBox,
-                             QComboBox, QCheckBox, QFileDialog, QHeaderView)
-from PyQt6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
+                             QTableWidget, QTableWidgetItem, QProgressBar, 
+                             QMessageBox, QGroupBox, QSpinBox, QComboBox, 
+                             QCheckBox, QFileDialog, QHeaderView, QDialog, 
+                             QFormLayout, QDialogButtonBox)
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from playwright.sync_api import sync_playwright
 import openpyxl
@@ -30,12 +24,54 @@ from openpyxl.styles import Font, PatternFill
 import vk_api
 
 
-# Папка для сохранения cookies авторизации
 USER_DATA_DIR = str(Path.home() / ".vk_finder_profile")
 
 
-class LoginThread(QThread):
-    """Поток для авторизации через vk.com/login"""
+class LoginDialog(QDialog):
+    """Диалог ввода логина/пароля"""
+    
+    def __init__(self, parent=None, need_code=False):
+        super().__init__(parent)
+        self.setWindowTitle("Двухфакторная авторизация" if need_code else "Вход ВКонтакте")
+        self.setFixedWidth(400)
+        
+        layout = QVBoxLayout(self)
+        
+        if need_code:
+            layout.addWidget(QLabel("Введите код из приложения:"))
+            form = QFormLayout()
+            self.code_input = QLineEdit()
+            form.addRow("Код:", self.code_input)
+            layout.addLayout(form)
+            self.code_input.setFocus()
+        else:
+            layout.addWidget(QLabel("Введите данные для входа:"))
+            form = QFormLayout()
+            
+            self.login_input = QLineEdit()
+            self.login_input.setPlaceholderText("Телефон или email")
+            form.addRow("Логин:", self.login_input)
+            
+            self.password_input = QLineEdit()
+            self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+            form.addRow("Пароль:", self.password_input)
+            
+            layout.addLayout(form)
+            self.login_input.setFocus()
+        
+        buttons = QDialogButtonBox(QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel)
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+    
+    def get_credentials(self):
+        if hasattr(self, 'code_input'):
+            return '', '', self.code_input.text().strip()
+        return self.login_input.text().strip(), self.password_input.text(), ''
+
+
+class BrowserLoginThread(QThread):
+    """Авторизация через браузер"""
     success = pyqtSignal()
     error = pyqtSignal(str)
     status = pyqtSignal(str)
@@ -56,52 +92,44 @@ class LoginThread(QThread):
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto("https://vk.com/login", wait_until='domcontentloaded')
                 
-                self.status.emit("Войдите в аккаунт VK в браузере")
+                self.status.emit("Войдите в VK в браузере")
                 self.waiting_for_confirmation.emit()
                 
-                # Ждём подтверждения от пользователя
                 while not hasattr(self, '_user_confirmed'):
                     time.sleep(0.5)
                 
                 time.sleep(2)
                 
-                # Проверяем авторизацию через cookies
                 cookies = context.cookies()
-                has_auth = any(cookie['name'] in ['remixsid', 'remixlang'] for cookie in cookies)
+                has_auth = any(c['name'] in ['remixsid', 'remixlang'] for c in cookies)
                 
                 if has_auth:
-                    self.status.emit("Авторизация успешна!")
-                    time.sleep(1)
                     context.close()
                     self.success.emit()
                 else:
-                    # Альтернативная проверка
                     page.goto("https://vk.com/feed", wait_until='domcontentloaded', timeout=10000)
                     time.sleep(2)
                     
                     if 'login' not in page.url:
-                        self.status.emit("Авторизация успешна!")
-                        time.sleep(1)
                         context.close()
                         self.success.emit()
                     else:
                         context.close()
-                        self.error.emit("Авторизация не удалась. Попробуйте снова.")
+                        self.error.emit("Авторизация не удалась")
                 
         except Exception as e:
             self.error.emit(f"Ошибка: {e}")
     
     def confirm_login(self):
-        """Пользователь подтвердил авторизацию"""
         self._user_confirmed = True
 
 
-class VKApiLoginThread(QThread):
-    """Поток для авторизации через vk_api (логин/пароль)"""
+class ApiLoginThread(QThread):
+    """Авторизация через VK API"""
     success = pyqtSignal()
     error = pyqtSignal(str)
     status = pyqtSignal(str)
-    need_2fa = pyqtSignal()  # Требуется двухфакторная авторизация
+    need_2fa = pyqtSignal()
     
     def __init__(self, login: str, password: str, code: str = ''):
         super().__init__()
@@ -113,43 +141,32 @@ class VKApiLoginThread(QThread):
         try:
             self.status.emit("Авторизация через VK API...")
             
-            # VK Standalone App ID (для десктопных приложений)
-            VK_APP_ID = 2685278
+            vk_session = vk_api.VkApi(
+                login=self.login,
+                password=self.password,
+                app_id=2685278,
+                auth_token_code=self.code if self.code else None
+            )
+            vk_session.auth(token_only=False)
             
-            try:
-                vk_session = vk_api.VkApi(
-                    login=self.login,
-                    password=self.password,
-                    app_id=VK_APP_ID,
-                    auth_token_code=self.code if self.code else None
-                )
-                vk_session.auth(token_only=False)
-                
-                # Сохраняем токен
-                token = vk_session.token['access_token']
-                token_file = Path(USER_DATA_DIR) / 'api_token.txt'
-                token_file.parent.mkdir(parents=True, exist_ok=True)
-                token_file.write_text(token)
-                
-                self.status.emit("Авторизация успешна!")
-                time.sleep(1)
-                self.success.emit()
-                
-            except vk_api.AuthError as e:
-                error_msg = str(e)
-                if '2fa' in error_msg.lower() or 'two' in error_msg.lower():
-                    self.need_2fa.emit()
-                else:
-                    self.error.emit(f"Ошибка авторизации: {error_msg}")
-            except Exception as e:
-                self.error.emit(f"Ошибка: {e}")
-                
+            token = vk_session.token['access_token']
+            token_file = Path(USER_DATA_DIR) / 'api_token.txt'
+            token_file.parent.mkdir(parents=True, exist_ok=True)
+            token_file.write_text(token)
+            
+            self.success.emit()
+            
+        except vk_api.AuthError as e:
+            if '2fa' in str(e).lower():
+                self.need_2fa.emit()
+            else:
+                self.error.emit(str(e))
         except Exception as e:
             self.error.emit(f"Ошибка: {e}")
 
 
 class SearchThread(QThread):
-    """Поток для поиска - создаёт СВОЙ Playwright"""
+    """Поиск сообществ"""
     progress = pyqtSignal(str)
     finished = pyqtSignal(list)
     error = pyqtSignal(str)
@@ -159,173 +176,86 @@ class SearchThread(QThread):
         self.query = query
         self.max_results = max_results
         self.fetch_details = fetch_details
-        self._stop_flag = False
+        self._stop = False
         
     def stop(self):
-        self._stop_flag = True
+        self._stop = True
     
     def run(self):
         try:
-            # Playwright создаётся ВНУТРИ этого потока
             with sync_playwright() as p:
-                self.progress.emit("Запускаем браузер...")
-                
-                # Используем сохранённые cookies
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=USER_DATA_DIR,
                     headless=False,
-                    args=['--start-maximized'],
                     viewport={'width': 1920, 'height': 1080}
                 )
                 
                 try:
-                    # Поиск сообществ
-                    communities = self._search_communities(context)
+                    communities = self._search(context)
                     
-                    if self._stop_flag:
-                        return
+                    if not self._stop and self.fetch_details and communities:
+                        communities = self._fetch_details(context, communities)
                     
-                    # Сбор контактов
-                    if self.fetch_details and communities:
-                        communities = self._fetch_all_details(context, communities)
-                    
-                    if not self._stop_flag:
+                    if not self._stop:
                         self.finished.emit(communities)
-                        
                 finally:
                     context.close()
                     
         except Exception as e:
-            self.error.emit(f"Ошибка: {e}")
+            self.error.emit(str(e))
     
-    def _search_communities(self, context) -> List[Dict]:
-        """Поиск сообществ VK"""
-        self.progress.emit("Открываем страницу поиска...")
+    def _search(self, context) -> List[Dict]:
+        self.progress.emit("Поиск сообществ...")
         
         page = context.new_page()
-        
         try:
-            url = f"https://vk.com/groups?q={self.query}"
-            page.goto(url, wait_until='domcontentloaded', timeout=30000)
+            page.goto(f"https://vk.com/groups?q={self.query}", wait_until='domcontentloaded', timeout=30000)
             time.sleep(3)
             
-            # Прокручиваем для загрузки
             for _ in range(5):
                 page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
                 time.sleep(1)
-                
-                if self._stop_flag:
+                if self._stop:
                     return []
             
-            # Парсим результаты
             communities = []
-            seen_ids = set()
+            seen = set()
             
-            # Ищем ссылки на группы
-            links = page.query_selector_all('a[href*="/club"]')
-            
-            for link in links:
-                if self._stop_flag:
+            for link in page.query_selector_all('a[href*="/club"]'):
+                if self._stop:
                     break
                 
-                try:
-                    href = link.get_attribute('href') or ''
-                    
-                    match = re.search(r'/club(\d+)', href)
-                    if not match:
-                        continue
-                    
-                    group_id = int(match.group(1))
-                    screen_name = f"club{group_id}"
-                    
-                    if group_id in seen_ids:
-                        continue
-                    seen_ids.add(group_id)
-                    
-                    # Получаем название
-                    name = ''
-                    # Пробуем разные селекторы для названия
-                    for selector in ['span', '.group_row_title', 'div']:
-                        name_elem = link.query_selector(selector)
-                        if name_elem:
-                            text = name_elem.inner_text().strip()
-                            if text and len(text) > 2 and len(text) < 100:
-                                name = text
-                                break
-                    
-                    if not name:
-                        name = screen_name
-                    
-                    communities.append({
-                        'id': group_id,
-                        'name': name,
-                        'screen_name': screen_name,
-                        'url': f"https://vk.com/{screen_name}",
-                        'members': 0,
-                        'phone': '',
-                        'email': '',
-                        'site': '',
-                        'city': '',
-                        'verified': False
-                    })
-                    
-                    if len(communities) >= self.max_results:
-                        break
-                        
-                except Exception:
+                href = link.get_attribute('href') or ''
+                match = re.search(r'/club(\d+)', href)
+                if not match:
                     continue
-            
-            # Если не нашли через /club, пробуем именные ссылки
-            if not communities:
-                self.progress.emit("Ищем именные сообщества...")
-                links = page.query_selector_all('a[href^="/"]')
                 
-                for link in links:
-                    if self._stop_flag:
-                        break
-                    
-                    try:
-                        href = link.get_attribute('href') or ''
-                        if not href.startswith('/') or href.count('/') > 1:
-                            continue
-                        
-                        screen_name = href.strip('/')
-                        
-                        # Пропускаем системные страницы
-                        skip = ['login', 'register', 'restore', 'settings', 'feed', 
-                                'messages', 'notifications', 'friends', 'groups', 
-                                'search', 'im', 'mail', 'communities', 'ads', 
-                                'developers', 'support', 'bugtracker', 'id', 'wall']
-                        if screen_name in skip or screen_name.startswith(('id', 'wall')):
-                            continue
-                        
-                        group_id = abs(hash(screen_name))
-                        if group_id in seen_ids:
-                            continue
-                        seen_ids.add(group_id)
-                        
-                        name = link.inner_text().strip()
-                        if not name or len(name) < 2 or len(name) > 100:
-                            continue
-                        
-                        communities.append({
-                            'id': group_id,
-                            'name': name,
-                            'screen_name': screen_name,
-                            'url': f"https://vk.com/{screen_name}",
-                            'members': 0,
-                            'phone': '',
-                            'email': '',
-                            'site': '',
-                            'city': '',
-                            'verified': False
-                        })
-                        
-                        if len(communities) >= self.max_results:
-                            break
-                            
-                    except Exception:
-                        continue
+                group_id = int(match.group(1))
+                if group_id in seen:
+                    continue
+                seen.add(group_id)
+                
+                name_elem = link.query_selector('span, div')
+                name = name_elem.inner_text().strip() if name_elem else f"club{group_id}"
+                
+                if not name or len(name) < 2:
+                    continue
+                
+                communities.append({
+                    'id': group_id,
+                    'name': name,
+                    'screen_name': f"club{group_id}",
+                    'url': f"https://vk.com/club{group_id}",
+                    'members': 0,
+                    'phone': '',
+                    'email': '',
+                    'site': '',
+                    'city': '',
+                    'verified': False
+                })
+                
+                if len(communities) >= self.max_results:
+                    break
             
             self.progress.emit(f"Найдено {len(communities)} сообществ")
             return communities
@@ -333,20 +263,19 @@ class SearchThread(QThread):
         finally:
             page.close()
     
-    def _fetch_all_details(self, context, communities: List[Dict]) -> List[Dict]:
-        """Получить детали для всех сообществ"""
+    def _fetch_details(self, context, communities: List[Dict]) -> List[Dict]:
         total = len(communities)
         
         for i, community in enumerate(communities):
-            if self._stop_flag:
+            if self._stop:
                 break
             
-            self.progress.emit(f"Контакты: {i+1}/{total} - {community['name']}")
+            self.progress.emit(f"Контакты: {i+1}/{total}")
             
             try:
-                details = self._fetch_community_details(context, community['screen_name'])
+                details = self._get_details(context, community['screen_name'])
                 community.update(details)
-            except Exception:
+            except:
                 pass
             
             if i < total - 1:
@@ -354,65 +283,45 @@ class SearchThread(QThread):
         
         return communities
     
-    def _fetch_community_details(self, context, screen_name: str) -> Dict:
-        """Получить детали конкретного сообщества"""
+    def _get_details(self, context, screen_name: str) -> Dict:
         page = context.new_page()
-        
         try:
-            url = f"https://vk.com/{screen_name}"
-            page.goto(url, wait_until='domcontentloaded', timeout=15000)
+            page.goto(f"https://vk.com/{screen_name}", wait_until='domcontentloaded', timeout=15000)
             time.sleep(2)
             
             details = {}
-            body_text = page.inner_text('body')
+            text = page.inner_text('body')
             
             # Телефон
-            phone_elem = page.query_selector('a[href^="tel:"]')
-            if phone_elem:
-                href = phone_elem.get_attribute('href')
-                if href:
-                    details['phone'] = href.replace('tel:', '').strip()
+            phone = page.query_selector('a[href^="tel:"]')
+            if phone:
+                details['phone'] = phone.get_attribute('href').replace('tel:', '').strip()
             else:
-                # Ищем телефон в тексте
-                phone_match = re.search(
-                    r'([\+]?[78][\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})',
-                    body_text
-                )
-                if phone_match:
-                    details['phone'] = phone_match.group(1).strip()
+                match = re.search(r'([\+]?[78][\s\-]?\(?\d{3}\)?[\s\-]?\d{3}[\s\-]?\d{2}[\s\-]?\d{2})', text)
+                if match:
+                    details['phone'] = match.group(1).strip()
             
             # Email
-            email_match = re.search(r'([\w.+-]+@[\w.-]+\.\w{2,})', body_text)
-            if email_match:
-                email = email_match.group(1)
-                if 'vk.com' not in email and 'vk.ru' not in email:
-                    details['email'] = email
+            match = re.search(r'([\w.+-]+@[\w.-]+\.\w{2,})', text)
+            if match and 'vk.com' not in match.group(1):
+                details['email'] = match.group(1)
             
             # Сайт
-            site_elem = page.query_selector('a[href^="http"]:not([href*="vk.com"]):not([href*="vk.ru"])')
-            if site_elem:
-                href = site_elem.get_attribute('href')
-                if href and 'vk.com' not in href and 'vk.ru' not in href:
+            site = page.query_selector('a[href^="http"]:not([href*="vk.com"])')
+            if site:
+                href = site.get_attribute('href')
+                if href and 'vk.com' not in href:
                     details['site'] = href
             
             # Участники
-            members_match = re.search(r'(\d[\d\s]*)\s*(?:участник|подписчик|человек)', body_text, re.I)
-            if members_match:
-                details['members'] = int(members_match.group(1).replace(' ', ''))
+            match = re.search(r'(\d[\d\s]*)\s*(?:участник|подписчик)', text, re.I)
+            if match:
+                details['members'] = int(match.group(1).replace(' ', ''))
             
             # Город
-            city_patterns = [
-                r'город[:\s]+([^,\n]+)',
-                r'г\.\s*([^,\n]+)',
-                r'Город\s*([^,\n]+)'
-            ]
-            for pattern in city_patterns:
-                match = re.search(pattern, body_text, re.I)
-                if match:
-                    city = match.group(1).strip()
-                    if len(city) > 1 and len(city) < 50:
-                        details['city'] = city
-                        break
+            match = re.search(r'город[:\s]+([^,\n]+)', text, re.I)
+            if match:
+                details['city'] = match.group(1).strip()
             
             # Верификация
             if page.query_selector('[class*="verified"]'):
@@ -424,133 +333,67 @@ class SearchThread(QThread):
             page.close()
 
 
-class LoginDialog(QDialog):
-    """Диалог для ввода логина/пароля VK"""
-    
-    def __init__(self, parent=None, need_code=False):
-        super().__init__(parent)
-        self.setWindowTitle("Вход ВКонтакте" if not need_code else "Двухфакторная авторизация")
-        self.setFixedWidth(400)
-        
-        layout = QVBoxLayout(self)
-        
-        if need_code:
-            layout.addWidget(QLabel("Введите код из приложения для двухфакторной авторизации:"))
-            form = QFormLayout()
-            self.code_input = QLineEdit()
-            self.code_input.setPlaceholderText("123456")
-            form.addRow("Код:", self.code_input)
-            layout.addLayout(form)
-        else:
-            layout.addWidget(QLabel("Введите данные для входа в ВКонтакте:"))
-            form = QFormLayout()
-            
-            self.login_input = QLineEdit()
-            self.login_input.setPlaceholderText("Телефон или email")
-            form.addRow("Логин:", self.login_input)
-            
-            self.password_input = QLineEdit()
-            self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
-            self.password_input.setPlaceholderText("Пароль")
-            form.addRow("Пароль:", self.password_input)
-            
-            layout.addLayout(form)
-            
-            hint = QLabel("💡 Пароль не сохраняется. Используется только для авторизации.")
-            hint.setStyleSheet("color: #888; font-size: 11px;")
-            hint.setWordWrap(True)
-            layout.addWidget(hint)
-        
-        buttons = QDialogButtonBox(
-            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
-        )
-        buttons.accepted.connect(self.accept)
-        buttons.rejected.connect(self.reject)
-        layout.addWidget(buttons)
-        
-        if need_code:
-            self.code_input.setFocus()
-        else:
-            self.login_input.setFocus()
-    
-    def get_credentials(self):
-        """Вернуть введённые данные"""
-        if hasattr(self, 'code_input'):
-            return '', '', self.code_input.text().strip()
-        return self.login_input.text().strip(), self.password_input.text(), ''
-
-
 class MainWindow(QMainWindow):
-    """Главное окно приложения"""
-    
     def __init__(self):
         super().__init__()
-        self.setWindowTitle("VK Community Finder - Поиск сообществ ВКонтакте")
+        self.setWindowTitle("VK Community Finder")
         self.setGeometry(100, 100, 1400, 900)
         
         self.communities = []
-        self.login_thread = None
-        self.api_login_thread = None
+        self.browser_thread = None
+        self.api_thread = None
         self.search_thread = None
-        self.is_logged_in = False
         
         self.init_ui()
-        
+        self.check_saved_auth()
+    
     def init_ui(self):
-        """Инициализация интерфейса"""
-        central_widget = QWidget()
-        self.setCentralWidget(central_widget)
-        layout = QVBoxLayout(central_widget)
+        central = QWidget()
+        self.setCentralWidget(central)
+        layout = QVBoxLayout(central)
         
-        # Группа авторизации
+        # Авторизация
         auth_group = QGroupBox("Авторизация")
         auth_layout = QHBoxLayout()
         
-        # Кнопка 1: Войти ВКонтакте (через vk.com/login)
-        self.btn_login = QPushButton("Войти ВКонтакте")
-        self.btn_login.clicked.connect(self.start_login)
-        self.btn_login.setToolTip("Авторизация через страницу входа VK (логин/пароль, QR-код)")
-        self.btn_login.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 8px 20px;")
-        auth_layout.addWidget(self.btn_login)
+        self.btn_browser = QPushButton("Войти ВКонтакте")
+        self.btn_browser.clicked.connect(self.start_browser_login)
+        self.btn_browser.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 8px 20px;")
+        auth_layout.addWidget(self.btn_browser)
         
-        # Кнопка 2: Войти по логину/паролю (через VK API)
-        self.btn_api_login = QPushButton("Войти по логину/паролю")
-        self.btn_api_login.clicked.connect(self.start_api_login)
-        self.btn_api_login.setToolTip("Быстрая авторизация через VK API (логин/пароль)")
-        self.btn_api_login.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 8px 20px;")
-        auth_layout.addWidget(self.btn_api_login)
+        self.btn_api = QPushButton("Войти по логину/паролю")
+        self.btn_api.clicked.connect(self.start_api_login)
+        self.btn_api.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 8px 20px;")
+        auth_layout.addWidget(self.btn_api)
         
-        # Кнопка подтверждения (для обычной авторизации)
-        self.btn_confirm_login = QPushButton("✓ Я авторизовался")
-        self.btn_confirm_login.clicked.connect(self.confirm_login)
-        self.btn_confirm_login.setEnabled(False)
-        self.btn_confirm_login.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 20px;")
-        auth_layout.addWidget(self.btn_confirm_login)
+        self.btn_confirm = QPushButton("✓ Я авторизовался")
+        self.btn_confirm.clicked.connect(self.confirm_login)
+        self.btn_confirm.setEnabled(False)
+        self.btn_confirm.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 20px;")
+        auth_layout.addWidget(self.btn_confirm)
         
-        self.lbl_auth_status = QLabel("Статус: Не авторизован")
-        self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
-        auth_layout.addWidget(self.lbl_auth_status)
+        self.lbl_status = QLabel("Статус: Не авторизован")
+        self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
+        auth_layout.addWidget(self.lbl_status)
         
         auth_layout.addStretch()
         
-        # Кнопка сброса авторизации
-        self.btn_reset_auth = QPushButton("Сбросить авторизацию")
-        self.btn_reset_auth.clicked.connect(self.reset_auth)
-        self.btn_reset_auth.setVisible(False)
-        auth_layout.addWidget(self.btn_reset_auth)
+        self.btn_reset = QPushButton("Сбросить")
+        self.btn_reset.clicked.connect(self.reset_auth)
+        self.btn_reset.setVisible(False)
+        auth_layout.addWidget(self.btn_reset)
         
         auth_group.setLayout(auth_layout)
         layout.addWidget(auth_group)
         
-        # Группа поиска
-        search_group = QGroupBox("Параметры поиска")
+        # Поиск
+        search_group = QGroupBox("Поиск")
         search_layout = QVBoxLayout()
         
-        # Строка поиска
         search_row = QHBoxLayout()
-        search_row.addWidget(QLabel("Поисковый запрос:"))
+        search_row.addWidget(QLabel("Запрос:"))
         self.input_query = QLineEdit()
-        self.input_query.setPlaceholderText("Введите ключевые слова (например: автосервис, доставка, салон красоты)")
+        self.input_query.setPlaceholderText("Введите ключевые слова...")
         self.input_query.returnPressed.connect(self.start_search)
         search_row.addWidget(self.input_query)
         
@@ -562,59 +405,39 @@ class MainWindow(QMainWindow):
         
         search_layout.addLayout(search_row)
         
-        # Настройки
         settings_row = QHBoxLayout()
-        
-        settings_row.addWidget(QLabel("Тип:"))
-        self.combo_type = QComboBox()
-        self.combo_type.addItems(["Все", "Группы", "Публичные страницы", "Встречи"])
-        settings_row.addWidget(self.combo_type)
-        
-        settings_row.addWidget(QLabel("Макс. результатов:"))
+        settings_row.addWidget(QLabel("Макс:"))
         self.spin_max = QSpinBox()
         self.spin_max.setRange(10, 500)
         self.spin_max.setValue(50)
         settings_row.addWidget(self.spin_max)
         
-        self.check_details = QCheckBox("Собирать контакты (телефон, email, сайт)")
+        self.check_details = QCheckBox("Собирать контакты")
         self.check_details.setChecked(True)
         settings_row.addWidget(self.check_details)
         
         settings_row.addStretch()
         search_layout.addLayout(settings_row)
         
-        # Подсказка
-        hint = QLabel("💡 Совет: чем конкретнее запрос, тем точнее результаты")
-        hint.setStyleSheet("color: #888; font-style: italic;")
-        search_layout.addWidget(hint)
-        
         search_group.setLayout(search_layout)
         layout.addWidget(search_group)
         
         # Прогресс
-        self.progress_bar = QProgressBar()
-        self.progress_bar.setVisible(False)
-        layout.addWidget(self.progress_bar)
+        self.progress = QProgressBar()
+        self.progress.setVisible(False)
+        layout.addWidget(self.progress)
         
-        self.lbl_status = QLabel("")
-        self.lbl_status.setStyleSheet("font-weight: bold;")
-        layout.addWidget(self.lbl_status)
+        self.lbl_progress = QLabel("")
+        layout.addWidget(self.lbl_progress)
         
-        # Таблица результатов
+        # Таблица
         self.table = QTableWidget()
         self.table.setColumnCount(9)
-        self.table.setHorizontalHeaderLabels([
-            "№", "Название", "Ссылка", "Участники", "Телефон", 
-            "Email", "Сайт", "Город", "Верифицировано"
-        ])
-        self.table.setAlternatingRowColors(True)
-        
-        header = self.table.horizontalHeader()
-        header.setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
-        
+        self.table.setHorizontalHeaderLabels(["№", "Название", "Ссылка", "Участники", "Телефон", "Email", "Сайт", "Город", "✓"])
+        self.table.horizontalHeader().setSectionResizeMode(1, QHeaderView.ResizeMode.Stretch)
         layout.addWidget(self.table)
         
-        # Кнопки экспорта
+        # Экспорт
         export_layout = QHBoxLayout()
         
         self.lbl_count = QLabel("Найдено: 0")
@@ -623,235 +446,170 @@ class MainWindow(QMainWindow):
         
         export_layout.addStretch()
         
-        self.btn_export = QPushButton("📊 Экспорт в Excel")
-        self.btn_export.clicked.connect(self.export_to_excel)
+        self.btn_export = QPushButton("Экспорт в Excel")
+        self.btn_export.clicked.connect(self.export_excel)
         self.btn_export.setEnabled(False)
-        self.btn_export.setMinimumWidth(180)
         export_layout.addWidget(self.btn_export)
         
-        self.btn_clear = QPushButton("🗑 Очистить")
-        self.btn_clear.clicked.connect(self.clear_results)
+        self.btn_clear = QPushButton("Очистить")
+        self.btn_clear.clicked.connect(self.clear)
         export_layout.addWidget(self.btn_clear)
         
         layout.addLayout(export_layout)
-        
-        # Проверяем есть ли сохранённая авторизация
-        self.check_saved_auth()
     
     def check_saved_auth(self):
-        """Проверяем есть ли сохранённая авторизация"""
         if os.path.exists(USER_DATA_DIR):
-            self.lbl_auth_status.setText("Статус: Есть сохранённая сессия")
-            self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+            self.lbl_status.setText("Статус: Есть сохранённая сессия")
+            self.lbl_status.setStyleSheet("color: orange;")
             self.btn_search.setEnabled(True)
-            self.btn_reset_auth.setVisible(True)
+            self.btn_reset.setVisible(True)
     
-    def start_login(self):
-        """Начать авторизацию через vk.com/login"""
-        self.btn_login.setEnabled(False)
-        self.btn_api_login.setEnabled(False)
-        self.btn_confirm_login.setEnabled(False)
-        self.lbl_auth_status.setText("Статус: Запуск браузера...")
-        self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+    def start_browser_login(self):
+        self.btn_browser.setEnabled(False)
+        self.btn_api.setEnabled(False)
+        self.btn_confirm.setEnabled(False)
+        self.lbl_status.setText("Запуск браузера...")
+        self.lbl_status.setStyleSheet("color: orange;")
         
-        self.login_thread = LoginThread()
-        self.login_thread.success.connect(self.on_login_success)
-        self.login_thread.error.connect(self.on_login_error)
-        self.login_thread.status.connect(self.on_login_status)
-        self.login_thread.waiting_for_confirmation.connect(self.on_waiting_for_confirmation)
-        self.login_thread.start()
+        self.browser_thread = BrowserLoginThread()
+        self.browser_thread.success.connect(self.on_login_success)
+        self.browser_thread.error.connect(self.on_login_error)
+        self.browser_thread.status.connect(self.update_status)
+        self.browser_thread.waiting_for_confirmation.connect(self.on_waiting)
+        self.browser_thread.start()
     
     def start_api_login(self):
-        """Начать авторизацию через VK API (логин/пароль)"""
         dialog = LoginDialog(self)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             login, password, code = dialog.get_credentials()
             
-            self.btn_login.setEnabled(False)
-            self.btn_api_login.setEnabled(False)
-            self.btn_confirm_login.setEnabled(False)
-            self.lbl_auth_status.setText("Статус: Авторизация через VK API...")
-            self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+            self.btn_browser.setEnabled(False)
+            self.btn_api.setEnabled(False)
+            self.lbl_status.setText("Авторизация...")
+            self.lbl_status.setStyleSheet("color: orange;")
             
-            self.api_login_thread = VKApiLoginThread(login, password, code)
-            self.api_login_thread.success.connect(self.on_login_success)
-            self.api_login_thread.error.connect(self.on_login_error)
-            self.api_login_thread.status.connect(self.on_login_status)
-            self.api_login_thread.need_2fa.connect(self.on_need_2fa)
-            self.api_login_thread.start()
+            self.api_thread = ApiLoginThread(login, password, code)
+            self.api_thread.success.connect(self.on_login_success)
+            self.api_thread.error.connect(self.on_login_error)
+            self.api_thread.status.connect(self.update_status)
+            self.api_thread.need_2fa.connect(self.on_need_2fa)
+            self.api_thread.start()
     
     def on_need_2fa(self):
-        """Требуется двухфакторная авторизация"""
         dialog = LoginDialog(self, need_code=True)
         if dialog.exec() == QDialog.DialogCode.Accepted:
             login, password, code = dialog.get_credentials()
             
-            self.api_login_thread = VKApiLoginThread(login, password, code)
-            self.api_login_thread.success.connect(self.on_login_success)
-            self.api_login_thread.error.connect(self.on_login_error)
-            self.api_login_thread.status.connect(self.on_login_status)
-            self.api_login_thread.need_2fa.connect(self.on_need_2fa)
-            self.api_login_thread.start()
+            self.api_thread = ApiLoginThread(login, password, code)
+            self.api_thread.success.connect(self.on_login_success)
+            self.api_thread.error.connect(self.on_login_error)
+            self.api_thread.status.connect(self.update_status)
+            self.api_thread.need_2fa.connect(self.on_need_2fa)
+            self.api_thread.start()
         else:
-            self.btn_login.setEnabled(True)
-            self.btn_api_login.setEnabled(True)
-            self.lbl_auth_status.setText("Статус: Авторизация отменена")
-            self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
+            self.btn_browser.setEnabled(True)
+            self.btn_api.setEnabled(True)
     
-    def on_waiting_for_confirmation(self):
-        """Браузер открыт, ждём подтверждения от пользователя"""
-        self.btn_confirm_login.setEnabled(True)
-        self.lbl_auth_status.setText("Статус: Войдите в VK в браузере, затем нажмите 'Я авторизовался'")
-        self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+    def on_waiting(self):
+        self.btn_confirm.setEnabled(True)
+        self.lbl_status.setText("Войдите в VK, затем нажмите 'Я авторизовался'")
     
     def confirm_login(self):
-        """Пользователь подтвердил что авторизовался"""
-        if self.login_thread and self.login_thread.isRunning():
-            self.btn_confirm_login.setEnabled(False)
-            self.lbl_auth_status.setText("Статус: Проверяем авторизацию...")
-            self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
-            self.login_thread.confirm_login()
+        if self.browser_thread and self.browser_thread.isRunning():
+            self.btn_confirm.setEnabled(False)
+            self.lbl_status.setText("Проверка...")
+            self.browser_thread.confirm_login()
     
-    def on_login_status(self, message: str):
-        """Обновление статуса авторизации"""
-        self.lbl_auth_status.setText(f"Статус: {message}")
+    def update_status(self, msg):
+        self.lbl_status.setText(msg)
     
     def on_login_success(self):
-        """Авторизация успешна"""
-        self.is_logged_in = True
-        self.lbl_auth_status.setText("Статус: Авторизован ✓")
-        self.lbl_auth_status.setStyleSheet("color: green; font-weight: bold;")
+        self.lbl_status.setText("Авторизован ✓")
+        self.lbl_status.setStyleSheet("color: green;")
         self.btn_search.setEnabled(True)
-        self.btn_login.setEnabled(True)
-        self.btn_api_login.setEnabled(True)
-        self.btn_confirm_login.setEnabled(False)
-        self.btn_reset_auth.setVisible(True)
-        
-        QMessageBox.information(
-            self, 
-            "Успех", 
-            "Авторизация успешна!\n\n"
-            "Сессия сохранена - при следующем запуске\n"
-            "авторизоваться не потребуется."
-        )
+        self.btn_browser.setEnabled(True)
+        self.btn_api.setEnabled(True)
+        self.btn_confirm.setEnabled(False)
+        self.btn_reset.setVisible(True)
+        QMessageBox.information(self, "Успех", "Авторизация успешна!")
     
-    def on_login_error(self, error: str):
-        """Ошибка авторизации"""
-        self.lbl_auth_status.setText(f"Статус: Ошибка")
-        self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
-        self.btn_login.setEnabled(True)
-        self.btn_api_login.setEnabled(True)
-        self.btn_confirm_login.setEnabled(False)
-        QMessageBox.critical(self, "Ошибка авторизации", error)
+    def on_login_error(self, error):
+        self.lbl_status.setText("Ошибка")
+        self.lbl_status.setStyleSheet("color: red;")
+        self.btn_browser.setEnabled(True)
+        self.btn_api.setEnabled(True)
+        self.btn_confirm.setEnabled(False)
+        QMessageBox.critical(self, "Ошибка", error)
     
     def reset_auth(self):
-        """Сбросить сохранённую авторизацию"""
-        reply = QMessageBox.question(
-            self,
-            "Сброс авторизации",
-            "Удалить сохранённую сессию VK?\n\n"
-            "Потребуется повторная авторизация.",
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
-        )
-        
-        if reply == QMessageBox.StandardButton.Yes:
+        if QMessageBox.question(self, "Сброс", "Удалить сессию?") == QMessageBox.StandardButton.Yes:
             import shutil
             try:
                 if os.path.exists(USER_DATA_DIR):
                     shutil.rmtree(USER_DATA_DIR)
-                self.is_logged_in = False
-                self.lbl_auth_status.setText("Статус: Не авторизован")
-                self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
+                self.lbl_status.setText("Не авторизован")
+                self.lbl_status.setStyleSheet("color: red;")
                 self.btn_search.setEnabled(False)
-                self.btn_reset_auth.setVisible(False)
-                QMessageBox.information(self, "Готово", "Сессия удалена")
+                self.btn_reset.setVisible(False)
             except Exception as e:
-                QMessageBox.critical(self, "Ошибка", f"Не удалось удалить: {e}")
+                QMessageBox.critical(self, "Ошибка", str(e))
     
     def start_search(self):
-        """Начать поиск"""
         query = self.input_query.text().strip()
         if not query:
-            QMessageBox.warning(self, "Ошибка", "Введите поисковый запрос")
+            QMessageBox.warning(self, "Ошибка", "Введите запрос")
             return
         
-        # Очищаем таблицу
         self.table.setRowCount(0)
         self.communities = []
         
-        # Настраиваем UI
-        self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)
+        self.progress.setVisible(True)
+        self.progress.setRange(0, 0)
         self.btn_search.setEnabled(False)
-        self.btn_login.setEnabled(False)
-        self.lbl_status.setText("Поиск...")
-        self.lbl_status.setStyleSheet("color: blue; font-weight: bold;")
+        self.lbl_progress.setText("Поиск...")
         
-        # Запускаем поток поиска
-        self.search_thread = SearchThread(
-            query=query,
-            max_results=self.spin_max.value(),
-            fetch_details=self.check_details.isChecked()
-        )
-        self.search_thread.progress.connect(self.on_search_progress)
-        self.search_thread.finished.connect(self.on_search_finished)
+        self.search_thread = SearchThread(query, self.spin_max.value(), self.check_details.isChecked())
+        self.search_thread.progress.connect(self.update_progress)
+        self.search_thread.finished.connect(self.on_search_done)
         self.search_thread.error.connect(self.on_search_error)
         self.search_thread.start()
     
-    def on_search_progress(self, message: str):
-        """Обновление прогресса поиска"""
-        self.lbl_status.setText(message)
-        self.lbl_status.setStyleSheet("color: blue; font-weight: bold;")
+    def update_progress(self, msg):
+        self.lbl_progress.setText(msg)
     
-    def on_search_finished(self, communities: List[Dict]):
-        """Поиск завершён"""
+    def on_search_done(self, communities):
         self.communities = communities
-        self.progress_bar.setVisible(False)
+        self.progress.setVisible(False)
         self.btn_search.setEnabled(True)
-        self.btn_login.setEnabled(True)
-        
-        self.lbl_status.setText(f"✅ Найдено {len(communities)} сообществ")
-        self.lbl_status.setStyleSheet("color: green; font-weight: bold;")
+        self.lbl_progress.setText(f"Найдено {len(communities)}")
         self.lbl_count.setText(f"Найдено: {len(communities)}")
         
-        # Обновляем таблицу
         self.table.setRowCount(len(communities))
-        
-        for i, community in enumerate(communities):
+        for i, c in enumerate(communities):
             self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
-            self.table.setItem(i, 1, QTableWidgetItem(community['name']))
-            self.table.setItem(i, 2, QTableWidgetItem(community['url']))
-            self.table.setItem(i, 3, QTableWidgetItem(str(community.get('members', ''))))
-            self.table.setItem(i, 4, QTableWidgetItem(community.get('phone', '')))
-            self.table.setItem(i, 5, QTableWidgetItem(community.get('email', '')))
-            self.table.setItem(i, 6, QTableWidgetItem(community.get('site', '')))
-            self.table.setItem(i, 7, QTableWidgetItem(community.get('city', '')))
-            self.table.setItem(i, 8, QTableWidgetItem("✓" if community.get('verified') else ""))
+            self.table.setItem(i, 1, QTableWidgetItem(c['name']))
+            self.table.setItem(i, 2, QTableWidgetItem(c['url']))
+            self.table.setItem(i, 3, QTableWidgetItem(str(c.get('members', ''))))
+            self.table.setItem(i, 4, QTableWidgetItem(c.get('phone', '')))
+            self.table.setItem(i, 5, QTableWidgetItem(c.get('email', '')))
+            self.table.setItem(i, 6, QTableWidgetItem(c.get('site', '')))
+            self.table.setItem(i, 7, QTableWidgetItem(c.get('city', '')))
+            self.table.setItem(i, 8, QTableWidgetItem("✓" if c.get('verified') else ""))
         
         self.btn_export.setEnabled(len(communities) > 0)
     
-    def on_search_error(self, error: str):
-        """Ошибка поиска"""
-        self.progress_bar.setVisible(False)
+    def on_search_error(self, error):
+        self.progress.setVisible(False)
         self.btn_search.setEnabled(True)
-        self.btn_login.setEnabled(True)
-        self.lbl_status.setText(f"❌ Ошибка: {error}")
-        self.lbl_status.setStyleSheet("color: red; font-weight: bold;")
-        QMessageBox.critical(self, "Ошибка поиска", error)
+        self.lbl_progress.setText(f"Ошибка: {error}")
+        QMessageBox.critical(self, "Ошибка", error)
     
-    def export_to_excel(self):
-        """Экспорт в Excel"""
+    def export_excel(self):
         if not self.communities:
             return
         
-        file_path, _ = QFileDialog.getSaveFileName(
-            self,
-            "Сохранить Excel файл",
-            f"vk_communities_{time.strftime('%Y-%m-%d')}.xlsx",
-            "Excel файлы (*.xlsx)"
-        )
-        
-        if not file_path:
+        path, _ = QFileDialog.getSaveFileName(self, "Сохранить", f"vk_{time.strftime('%Y-%m-%d')}.xlsx", "Excel (*.xlsx)")
+        if not path:
             return
         
         try:
@@ -859,82 +617,45 @@ class MainWindow(QMainWindow):
             ws = wb.active
             ws.title = "Сообщества"
             
-            # Заголовки
-            headers = ["№", "Название", "Ссылка", "Участники", "Телефон", 
-                      "Email", "Сайт", "Город", "Верифицировано"]
+            headers = ["№", "Название", "Ссылка", "Участники", "Телефон", "Email", "Сайт", "Город", "Верифицировано"]
             ws.append(headers)
             
-            # Стиль заголовков
-            header_fill = PatternFill(start_color="4C75A3", end_color="4C75A3", fill_type="solid")
-            header_font = Font(bold=True, color="FFFFFF")
+            fill = PatternFill(start_color="4C75A3", end_color="4C75A3", fill_type="solid")
+            font = Font(bold=True, color="FFFFFF")
             
             for cell in ws[1]:
-                cell.fill = header_fill
-                cell.font = header_font
+                cell.fill = fill
+                cell.font = font
             
-            # Данные
-            for i, community in enumerate(self.communities, 1):
-                ws.append([
-                    i,
-                    community['name'],
-                    community['url'],
-                    community.get('members', ''),
-                    community.get('phone', ''),
-                    community.get('email', ''),
-                    community.get('site', ''),
-                    community.get('city', ''),
-                    "Да" if community.get('verified') else "Нет"
-                ])
+            for i, c in enumerate(self.communities, 1):
+                ws.append([i, c['name'], c['url'], c.get('members', ''), c.get('phone', ''), 
+                          c.get('email', ''), c.get('site', ''), c.get('city', ''), 
+                          "Да" if c.get('verified') else "Нет"])
             
-            # Ширина колонок
-            ws.column_dimensions['A'].width = 5
-            ws.column_dimensions['B'].width = 40
-            ws.column_dimensions['C'].width = 35
-            ws.column_dimensions['D'].width = 12
-            ws.column_dimensions['E'].width = 18
-            ws.column_dimensions['F'].width = 25
-            ws.column_dimensions['G'].width = 30
-            ws.column_dimensions['H'].width = 15
-            ws.column_dimensions['I'].width = 12
+            for col in ['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H', 'I']:
+                ws.column_dimensions[col].width = 15 if col != 'B' else 40
             
-            # Лист сводки
-            ws2 = wb.create_sheet("Сводка")
-            ws2.append(["Параметр", "Значение"])
-            ws2.append(["Всего сообществ", len(self.communities)])
-            ws2.append(["С телефонами", sum(1 for c in self.communities if c.get('phone'))])
-            ws2.append(["С email", sum(1 for c in self.communities if c.get('email'))])
-            ws2.append(["С сайтами", sum(1 for c in self.communities if c.get('site'))])
-            ws2.append(["Верифицированные", sum(1 for c in self.communities if c.get('verified'))])
-            ws2.append(["Общее число участников", sum(c.get('members', 0) for c in self.communities)])
-            ws2.append(["Дата экспорта", time.strftime('%Y-%m-%d %H:%M')])
-            
-            ws2.column_dimensions['A'].width = 25
-            ws2.column_dimensions['B'].width = 20
-            
-            wb.save(file_path)
-            QMessageBox.information(self, "Успех", f"Файл сохранён:\n{file_path}")
+            wb.save(path)
+            QMessageBox.information(self, "Успех", f"Сохранено:\n{path}")
             
         except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось сохранить файл:\n{e}")
+            QMessageBox.critical(self, "Ошибка", str(e))
     
-    def clear_results(self):
-        """Очистить результаты"""
+    def clear(self):
         self.table.setRowCount(0)
         self.communities = []
         self.btn_export.setEnabled(False)
-        self.lbl_status.setText("")
+        self.lbl_progress.setText("")
         self.lbl_count.setText("Найдено: 0")
     
     def closeEvent(self, event):
-        """Закрытие приложения"""
-        # Останавливаем потоки
-        if self.login_thread and self.login_thread.isRunning():
-            self.login_thread.quit()
-            self.login_thread.wait(3000)
+        if self.browser_thread and self.browser_thread.isRunning():
+            self.browser_thread.quit()
+            self.browser_thread.wait(3000)
         
-        if self.api_login_thread and self.api_login_thread.isRunning():
-            self.api_login_thread.quit()
-            self.api_login_thread.wait(3000)
+        if self.api_thread and self.api_thread.isRunning():
+            self.api_thread.quit()
+            self.api_thread.wait(3000)
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
@@ -945,17 +666,9 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    """Точка входа"""
     app = QApplication(sys.argv)
-    app.setStyle('Fusion')
-    
-    # Тёмная тема
-    palette = app.palette()
-    app.setPalette(palette)
-    
     window = MainWindow()
     window.show()
-    
     sys.exit(app.exec())
 
 
