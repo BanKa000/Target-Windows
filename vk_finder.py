@@ -33,18 +33,17 @@ USER_DATA_DIR = str(Path.home() / ".vk_finder_profile")
 
 
 class LoginThread(QThread):
-    """Поток для авторизации через VK ID SDK"""
+    """Поток для авторизации через vk.com/login"""
     success = pyqtSignal()
     error = pyqtSignal(str)
     status = pyqtSignal(str)
+    waiting_for_confirmation = pyqtSignal()
     
     def run(self):
         try:
-            # Playwright создаётся ВНУТРИ этого потока
             with sync_playwright() as p:
-                self.status.emit("Запускаем браузер с VK ID...")
+                self.status.emit("Запускаем браузер...")
                 
-                # Persistent context сохраняет cookies на диск
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=USER_DATA_DIR,
                     headless=False,
@@ -53,47 +52,46 @@ class LoginThread(QThread):
                 )
                 
                 page = context.pages[0] if context.pages else context.new_page()
+                page.goto("https://vk.com/login", wait_until='domcontentloaded')
                 
-                # Загружаем HTML страницу с VK ID SDK
-                html_path = Path(__file__).parent / 'vk_login.html'
-                page.goto(f'file://{html_path.absolute()}', wait_until='networkidle')
+                self.status.emit("Войдите в аккаунт VK в браузере")
+                self.waiting_for_confirmation.emit()
                 
-                self.status.emit("Авторизуйтесь через VK ID в открывшемся окне")
+                # Ждём подтверждения от пользователя
+                while not hasattr(self, '_user_confirmed'):
+                    time.sleep(0.5)
                 
-                # Ждём успешной авторизации (проверяем window.authResult)
-                max_wait = 300  # 5 минут
-                for _ in range(max_wait):
+                time.sleep(2)
+                
+                # Проверяем авторизацию через cookies
+                cookies = context.cookies()
+                has_auth = any(cookie['name'] in ['remixsid', 'remixlang'] for cookie in cookies)
+                
+                if has_auth:
+                    self.status.emit("Авторизация успешна!")
                     time.sleep(1)
+                    context.close()
+                    self.success.emit()
+                else:
+                    # Альтернативная проверка
+                    page.goto("https://vk.com/feed", wait_until='domcontentloaded', timeout=10000)
+                    time.sleep(2)
                     
-                    # Проверяем результат через JavaScript
-                    auth_result = page.evaluate('window.authResult')
-                    auth_error = page.evaluate('window.authError')
-                    
-                    if auth_result:
-                        # Авторизация успешна
-                        self.status.emit("Авторизация успешна! Сохраняем сессию...")
-                        time.sleep(2)
-                        
-                        # Дополнительно заходим на VK чтобы получить cookies
-                        page.goto('https://vk.com/feed', wait_until='domcontentloaded', timeout=15000)
-                        time.sleep(3)
-                        
+                    if 'login' not in page.url:
+                        self.status.emit("Авторизация успешна!")
+                        time.sleep(1)
                         context.close()
                         self.success.emit()
-                        return
-                    
-                    if auth_error:
-                        # Ошибка авторизации
+                    else:
                         context.close()
-                        self.error.emit(f"Ошибка авторизации: {auth_error}")
-                        return
-                
-                # Таймаут
-                context.close()
-                self.error.emit("Время ожидания истекло. Попробуйте снова.")
+                        self.error.emit("Авторизация не удалась. Попробуйте снова.")
                 
         except Exception as e:
             self.error.emit(f"Ошибка: {e}")
+    
+    def confirm_login(self):
+        """Пользователь подтвердил авторизацию"""
+        self._user_confirmed = True
 
 
 class SearchThread(QThread):
@@ -397,10 +395,16 @@ class MainWindow(QMainWindow):
         auth_group = QGroupBox("Авторизация")
         auth_layout = QHBoxLayout()
         
-        self.btn_login = QPushButton("Войти через VK ID")
+        self.btn_login = QPushButton("Войти ВКонтакте")
         self.btn_login.clicked.connect(self.start_login)
         self.btn_login.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 8px 20px;")
         auth_layout.addWidget(self.btn_login)
+        
+        self.btn_confirm_login = QPushButton("✓ Я авторизовался")
+        self.btn_confirm_login.clicked.connect(self.confirm_login)
+        self.btn_confirm_login.setEnabled(False)
+        self.btn_confirm_login.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 20px;")
+        auth_layout.addWidget(self.btn_confirm_login)
         
         self.lbl_auth_status = QLabel("Статус: Не авторизован")
         self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
@@ -522,8 +526,9 @@ class MainWindow(QMainWindow):
             self.btn_reset_auth.setVisible(True)
     
     def start_login(self):
-        """Начать авторизацию через VK ID"""
+        """Начать авторизацию"""
         self.btn_login.setEnabled(False)
+        self.btn_confirm_login.setEnabled(False)
         self.lbl_auth_status.setText("Статус: Запуск браузера...")
         self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
         
@@ -531,7 +536,22 @@ class MainWindow(QMainWindow):
         self.login_thread.success.connect(self.on_login_success)
         self.login_thread.error.connect(self.on_login_error)
         self.login_thread.status.connect(self.on_login_status)
+        self.login_thread.waiting_for_confirmation.connect(self.on_waiting_for_confirmation)
         self.login_thread.start()
+    
+    def on_waiting_for_confirmation(self):
+        """Браузер открыт, ждём подтверждения от пользователя"""
+        self.btn_confirm_login.setEnabled(True)
+        self.lbl_auth_status.setText("Статус: Войдите в VK в браузере, затем нажмите 'Я авторизовался'")
+        self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+    
+    def confirm_login(self):
+        """Пользователь подтвердил что авторизовался"""
+        if self.login_thread and self.login_thread.isRunning():
+            self.btn_confirm_login.setEnabled(False)
+            self.lbl_auth_status.setText("Статус: Проверяем авторизацию...")
+            self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+            self.login_thread.confirm_login()
     
     def on_login_status(self, message: str):
         """Обновление статуса авторизации"""
@@ -544,6 +564,7 @@ class MainWindow(QMainWindow):
         self.lbl_auth_status.setStyleSheet("color: green; font-weight: bold;")
         self.btn_search.setEnabled(True)
         self.btn_login.setEnabled(True)
+        self.btn_confirm_login.setEnabled(False)
         self.btn_reset_auth.setVisible(True)
         
         QMessageBox.information(
@@ -559,6 +580,7 @@ class MainWindow(QMainWindow):
         self.lbl_auth_status.setText(f"Статус: Ошибка")
         self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
         self.btn_login.setEnabled(True)
+        self.btn_confirm_login.setEnabled(False)
         QMessageBox.critical(self, "Ошибка авторизации", error)
     
     def reset_auth(self):
