@@ -6,314 +6,20 @@ VK Community Finder - Поиск сообществ ВКонтакте
 """
 
 import sys
-import json
 import time
 import re
-from pathlib import Path
-from datetime import datetime
-from typing import List, Dict, Optional
+from typing import List, Dict
+from threading import Thread
 
 from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout, 
                              QHBoxLayout, QLabel, QLineEdit, QPushButton, 
-                             QTextEdit, QTableWidget, QTableWidgetItem, 
+                             QTableWidget, QTableWidgetItem, 
                              QProgressBar, QMessageBox, QGroupBox, QSpinBox,
                              QComboBox, QCheckBox, QFileDialog, QHeaderView)
-from PyQt6.QtCore import Qt, QThread, pyqtSignal
-from playwright.sync_api import sync_playwright, Page, Browser
+from PyQt6.QtCore import Qt, QTimer
+from playwright.sync_api import sync_playwright, Browser
 import openpyxl
 from openpyxl.styles import Font, PatternFill
-
-
-class VKParserThread(QThread):
-    """Поток для парсинга VK без блокировки GUI"""
-    progress = pyqtSignal(str)
-    finished = pyqtSignal(list)
-    error = pyqtSignal(str)
-    
-    def __init__(self, browser: Browser, query: str, max_results: int, 
-                 group_type: str, fetch_details: bool):
-        super().__init__()
-        self.browser = browser
-        self.query = query
-        self.max_results = max_results
-        self.group_type = group_type
-        self.fetch_details = fetch_details
-        self.running = True
-        
-    def stop(self):
-        self.running = False
-        
-    def run(self):
-        try:
-            communities = self.search_communities()
-            if self.running and self.fetch_details:
-                communities = self.fetch_all_details(communities)
-            if self.running:
-                self.finished.emit(communities)
-        except Exception as e:
-            self.error.emit(str(e))
-    
-    def search_communities(self) -> List[Dict]:
-        """Поиск сообществ VK"""
-        self.progress.emit("Открываем страницу поиска...")
-        
-        context = self.browser.new_context(
-            viewport={'width': 1920, 'height': 1080},
-            user_agent='Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36'
-        )
-        page = context.new_page()
-        
-        try:
-            # Правильный URL для поиска групп
-            url = f"https://vk.com/groups?q={self.query}"
-            page.goto(url, wait_until='networkidle', timeout=30000)
-            time.sleep(2)
-            
-            # Прокручиваем страницу для загрузки результатов
-            self.progress.emit("Загружаем результаты поиска...")
-            for _ in range(3):
-                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
-                time.sleep(1)
-            
-            # Парсим результаты
-            communities = []
-            seen_ids = set()
-            
-            # Ищем все ссылки на группы
-            links = page.query_selector_all('a[href*="/club"], a[href^="/"][class*="group"]')
-            
-            for link in links:
-                if not self.running:
-                    break
-                    
-                try:
-                    href = link.get_attribute('href')
-                    if not href:
-                        continue
-                    
-                    # Извлекаем ID или название
-                    if '/club' in href:
-                        match = re.search(r'/club(\d+)', href)
-                        if match:
-                            group_id = int(match.group(1))
-                            screen_name = f"club{group_id}"
-                        else:
-                            continue
-                    else:
-                        screen_name = href.strip('/')
-                        group_id = hash(screen_name)
-                    
-                    if group_id in seen_ids:
-                        continue
-                    seen_ids.add(group_id)
-                    
-                    # Получаем название
-                    name_elem = link.query_selector('span, div')
-                    name = name_elem.inner_text() if name_elem else screen_name
-                    name = name.strip()
-                    
-                    if not name or len(name) < 2:
-                        continue
-                    
-                    communities.append({
-                        'id': group_id,
-                        'name': name,
-                        'screen_name': screen_name,
-                        'url': f"https://vk.com/{screen_name}",
-                        'members': 0,
-                        'description': '',
-                        'phone': '',
-                        'email': '',
-                        'site': '',
-                        'city': '',
-                        'verified': False
-                    })
-                    
-                    if len(communities) >= self.max_results:
-                        break
-                        
-                except Exception as e:
-                    continue
-            
-            self.progress.emit(f"Найдено {len(communities)} сообществ")
-            return communities
-            
-        finally:
-            page.close()
-            context.close()
-    
-    def fetch_all_details(self, communities: List[Dict]) -> List[Dict]:
-        """Получить детали для всех сообществ"""
-        total = len(communities)
-        
-        for i, community in enumerate(communities):
-            if not self.running:
-                break
-                
-            self.progress.emit(f"Собираем контакты: {i+1}/{total} - {community['name']}")
-            
-            try:
-                details = self.fetch_community_details(community['screen_name'])
-                community.update(details)
-            except Exception as e:
-                pass
-            
-            # Задержка чтобы не перегружать VK
-            if i < total - 1:
-                time.sleep(1.5)
-        
-        return communities
-    
-    def fetch_community_details(self, screen_name: str) -> Dict:
-        """Получить детали конкретного сообщества"""
-        context = self.browser.new_context(
-            viewport={'width': 1920, 'height': 1080}
-        )
-        page = context.new_page()
-        
-        try:
-            url = f"https://vk.com/{screen_name}"
-            page.goto(url, wait_until='networkidle', timeout=15000)
-            time.sleep(1)
-            
-            details = {}
-            
-            # Извлекаем телефон
-            phone_elem = page.query_selector('a[href^="tel:"]')
-            if phone_elem:
-                href = phone_elem.get_attribute('href')
-                if href:
-                    details['phone'] = href.replace('tel:', '').strip()
-            
-            # Извлекаем email
-            email_pattern = r'[\w.+-]+@[\w.-]+\.\w{2,}'
-            emails = page.evaluate(f'document.body.innerText.match(/{email_pattern}/g) || []')
-            for email in emails:
-                if 'vk.com' not in email and 'vk.ru' not in email:
-                    details['email'] = email
-                    break
-            
-            # Извлекаем сайт
-            site_elem = page.query_selector('a[href^="http"]:not([href*="vk.com"])')
-            if site_elem:
-                href = site_elem.get_attribute('href')
-                if href and 'vk.com' not in href:
-                    details['site'] = href
-            
-            # Извлекаем количество участников
-            members_text = page.inner_text('body')
-            match = re.search(r'(\d[\d\s]*)\s*(?:участник|подписчик|человек)', members_text, re.I)
-            if match:
-                details['members'] = int(match.group(1).replace(' ', ''))
-            
-            # Извлекаем город
-            city_patterns = [
-                r'город[:\s]+([^,\n]+)',
-                r'г\.\s*([^,\n]+)'
-            ]
-            for pattern in city_patterns:
-                match = re.search(pattern, members_text, re.I)
-                if match:
-                    details['city'] = match.group(1).strip()
-                    break
-            
-            # Проверяем верификацию
-            if page.query_selector('[class*="verified"]'):
-                details['verified'] = True
-            
-            return details
-            
-        finally:
-            page.close()
-            context.close()
-
-
-class LoginWindow(QWidget):
-    """Окно авторизации VK"""
-    login_success = pyqtSignal(object)  # Передаём browser
-    
-    def __init__(self):
-        super().__init__()
-        self.setWindowTitle("Авторизация ВКонтакте")
-        self.setGeometry(100, 100, 1200, 800)
-        self.browser = None
-        self.playwright = None
-        
-        layout = QVBoxLayout()
-        
-        # Инструкция
-        info = QLabel(
-            "<h3>Авторизация ВКонтакте</h3>"
-            "<p>1. Войдите в свой аккаунт ВКонтакте в открывшемся окне</p>"
-            "<p>2. После успешной авторизации нажмите кнопку 'Завершить вход'</p>"
-            "<p>3. Сессия сохранится для дальнейшей работы</p>"
-        )
-        info.setWordWrap(True)
-        layout.addWidget(info)
-        
-        # Кнопки
-        btn_layout = QHBoxLayout()
-        
-        self.btn_open_vk = QPushButton("Открыть ВКонтакте")
-        self.btn_open_vk.clicked.connect(self.open_vk)
-        btn_layout.addWidget(self.btn_open_vk)
-        
-        self.btn_finish = QPushButton("Завершить вход")
-        self.btn_finish.clicked.connect(self.finish_login)
-        self.btn_finish.setEnabled(False)
-        btn_layout.addWidget(self.btn_finish)
-        
-        layout.addLayout(btn_layout)
-        
-        # Статус
-        self.status = QLabel("Статус: Ожидание...")
-        layout.addWidget(self.status)
-        
-        self.setLayout(layout)
-        
-    def open_vk(self):
-        """Открыть VK в браузере"""
-        try:
-            self.status.setText("Статус: Запускаем браузер...")
-            
-            self.playwright = sync_playwright().start()
-            self.browser = self.playwright.chromium.launch(
-                headless=False,
-                args=['--start-maximized']
-            )
-            
-            context = self.browser.new_context(
-                viewport={'width': 1920, 'height': 1080}
-            )
-            page = context.new_page()
-            page.goto("https://vk.com/login")
-            
-            self.status.setText("Статус: Войдите в аккаунт ВКонтакте")
-            self.btn_finish.setEnabled(True)
-            
-        except Exception as e:
-            QMessageBox.critical(self, "Ошибка", f"Не удалось запустить браузер:\n{e}")
-    
-    def finish_login(self):
-        """Завершить авторизацию"""
-        if self.browser:
-            self.status.setText("Статус: Авторизация завершена")
-            self.login_success.emit(self.browser)
-            self.close()
-    
-    def closeEvent(self, event):
-        """Закрыть браузер при закрытии окна"""
-        if self.browser:
-            try:
-                self.browser.close()
-            except:
-                pass
-        if self.playwright:
-            try:
-                self.playwright.stop()
-            except:
-                pass
-        event.accept()
 
 
 class MainWindow(QMainWindow):
@@ -324,11 +30,16 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("VK Community Finder - Поиск сообществ ВКонтакте")
         self.setGeometry(100, 100, 1400, 900)
         
+        # Playwright инициализируется один раз
+        self.playwright = None
         self.browser = None
-        self.parser_thread = None
         self.communities = []
         
         self.init_ui()
+        
+        # Таймер для обновления GUI во время парсинга
+        self.update_timer = QTimer()
+        self.update_timer.timeout.connect(self.check_parsing_status)
         
     def init_ui(self):
         """Инициализация интерфейса"""
@@ -341,7 +52,7 @@ class MainWindow(QMainWindow):
         auth_layout = QHBoxLayout()
         
         self.btn_login = QPushButton("Войти ВКонтакте")
-        self.btn_login.clicked.connect(self.show_login_window)
+        self.btn_login.clicked.connect(self.login_to_vk)
         auth_layout.addWidget(self.btn_login)
         
         self.lbl_auth_status = QLabel("Статус: Не авторизован")
@@ -430,19 +141,64 @@ class MainWindow(QMainWindow):
         export_layout.addStretch()
         layout.addLayout(export_layout)
         
-    def show_login_window(self):
-        """Показать окно авторизации"""
-        self.login_window = LoginWindow()
-        self.login_window.login_success.connect(self.on_login_success)
-        self.login_window.show()
-    
-    def on_login_success(self, browser):
-        """Обработка успешной авторизации"""
-        self.browser = browser
-        self.lbl_auth_status.setText("Статус: Авторизован ✓")
-        self.lbl_auth_status.setStyleSheet("color: green;")
-        self.btn_search.setEnabled(True)
-        QMessageBox.information(self, "Успех", "Авторизация успешна! Теперь вы можете искать сообщества.")
+        # Статус парсинга
+        self.parsing_active = False
+        self.parsing_thread = None
+        
+    def login_to_vk(self):
+        """Авторизация ВКонтакте"""
+        try:
+            self.lbl_auth_status.setText("Статус: Запускаем браузер...")
+            QApplication.processEvents()
+            
+            # Инициализируем Playwright один раз
+            if not self.playwright:
+                self.playwright = sync_playwright().start()
+                self.browser = self.playwright.chromium.launch(
+                    headless=False,
+                    args=['--start-maximized']
+                )
+            
+            # Открываем страницу входа
+            context = self.browser.new_context(
+                viewport={'width': 1920, 'height': 1080}
+            )
+            page = context.new_page()
+            page.goto("https://vk.com/login")
+            
+            self.lbl_auth_status.setText("Статус: Войдите в аккаунт ВКонтакте в открывшемся окне")
+            self.lbl_auth_status.setStyleSheet("color: orange;")
+            
+            # Ждём пока пользователь войдёт
+            QMessageBox.information(
+                self, 
+                "Авторизация", 
+                "Войдите в свой аккаунт ВКонтакте в открывшемся браузере.\n\n"
+                "После успешного входа нажмите OK."
+            )
+            
+            # Проверяем что авторизация успешна
+            current_url = page.url
+            if 'login' not in current_url:
+                self.lbl_auth_status.setText("Статус: Авторизован ✓")
+                self.lbl_auth_status.setStyleSheet("color: green;")
+                self.btn_search.setEnabled(True)
+                
+                # Закрываем страницу входа, но оставляем браузер
+                page.close()
+                context.close()
+                
+                QMessageBox.information(self, "Успех", "Авторизация успешна! Теперь вы можете искать сообщества.")
+            else:
+                self.lbl_auth_status.setText("Статус: Авторизация не завершена")
+                self.lbl_auth_status.setStyleSheet("color: red;")
+                page.close()
+                context.close()
+                
+        except Exception as e:
+            self.lbl_auth_status.setText("Статус: Ошибка")
+            self.lbl_auth_status.setStyleSheet("color: red;")
+            QMessageBox.critical(self, "Ошибка авторизации", f"Не удалось авторизоваться:\n{e}")
     
     def start_search(self):
         """Начать поиск"""
@@ -461,38 +217,224 @@ class MainWindow(QMainWindow):
         
         # Настраиваем UI
         self.progress_bar.setVisible(True)
-        self.progress_bar.setRange(0, 0)  # Неопределённый прогресс
+        self.progress_bar.setRange(0, 0)
         self.btn_search.setEnabled(False)
         self.lbl_status.setText("Поиск...")
+        self.parsing_active = True
         
-        # Запускаем поток парсинга
-        self.parser_thread = VKParserThread(
-            browser=self.browser,
-            query=query,
-            max_results=self.spin_max.value(),
-            group_type=self.combo_type.currentText(),
-            fetch_details=self.check_details.isChecked()
+        # Запускаем парсинг в отдельном потоке
+        self.parsing_thread = Thread(
+            target=self.do_parsing,
+            args=(query, self.spin_max.value(), self.check_details.isChecked()),
+            daemon=True
         )
-        self.parser_thread.progress.connect(self.update_status)
-        self.parser_thread.finished.connect(self.on_search_finished)
-        self.parser_thread.error.connect(self.on_search_error)
-        self.parser_thread.start()
-    
-    def update_status(self, message: str):
-        """Обновить статус"""
-        self.lbl_status.setText(message)
-    
-    def on_search_finished(self, communities: List[Dict]):
-        """Поиск завершён"""
-        self.communities = communities
-        self.progress_bar.setVisible(False)
-        self.btn_search.setEnabled(True)
-        self.lbl_status.setText(f"Найдено {len(communities)} сообществ")
+        self.parsing_thread.start()
         
-        # Заполняем таблицу
-        self.table.setRowCount(len(communities))
+        # Запускаем таймер для обновления GUI
+        self.update_timer.start(100)
+    
+    def do_parsing(self, query: str, max_results: int, fetch_details: bool):
+        """Выполнить парсинг (в отдельном потоке)"""
+        try:
+            # Ищем сообщества
+            self.lbl_status.setText("Открываем страницу поиска...")
+            communities = self.search_communities(query, max_results)
+            
+            if not communities:
+                self.lbl_status.setText("Сообщества не найдены")
+                self.parsing_active = False
+                return
+            
+            # Собираем детали если нужно
+            if fetch_details:
+                communities = self.fetch_all_details(communities)
+            
+            self.communities = communities
+            self.lbl_status.setText(f"Найдено {len(communities)} сообществ")
+            
+        except Exception as e:
+            self.lbl_status.setText(f"Ошибка: {e}")
+        finally:
+            self.parsing_active = False
+    
+    def search_communities(self, query: str, max_results: int) -> List[Dict]:
+        """Поиск сообществ VK"""
+        context = self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080}
+        )
+        page = context.new_page()
+        
+        try:
+            # Правильный URL для поиска групп
+            url = f"https://vk.com/groups?q={query}"
+            page.goto(url, wait_until='networkidle', timeout=30000)
+            time.sleep(2)
+            
+            # Прокручиваем страницу для загрузки результатов
+            for _ in range(3):
+                page.evaluate("window.scrollTo(0, document.body.scrollHeight)")
+                time.sleep(1)
+            
+            # Парсим результаты
+            communities = []
+            seen_ids = set()
+            
+            # Ищем все ссылки на группы
+            links = page.query_selector_all('a[href*="/club"], a[href^="/"][class*="group"]')
+            
+            for link in links:
+                try:
+                    href = link.get_attribute('href')
+                    if not href:
+                        continue
+                    
+                    # Извлекаем ID или название
+                    if '/club' in href:
+                        match = re.search(r'/club(\d+)', href)
+                        if match:
+                            group_id = int(match.group(1))
+                            screen_name = f"club{group_id}"
+                        else:
+                            continue
+                    else:
+                        screen_name = href.strip('/')
+                        group_id = hash(screen_name)
+                    
+                    if group_id in seen_ids:
+                        continue
+                    seen_ids.add(group_id)
+                    
+                    # Получаем название
+                    name_elem = link.query_selector('span, div')
+                    name = name_elem.inner_text() if name_elem else screen_name
+                    name = name.strip()
+                    
+                    if not name or len(name) < 2:
+                        continue
+                    
+                    communities.append({
+                        'id': group_id,
+                        'name': name,
+                        'screen_name': screen_name,
+                        'url': f"https://vk.com/{screen_name}",
+                        'members': 0,
+                        'description': '',
+                        'phone': '',
+                        'email': '',
+                        'site': '',
+                        'city': '',
+                        'verified': False
+                    })
+                    
+                    if len(communities) >= max_results:
+                        break
+                        
+                except Exception:
+                    continue
+            
+            return communities
+            
+        finally:
+            page.close()
+            context.close()
+    
+    def fetch_all_details(self, communities: List[Dict]) -> List[Dict]:
+        """Получить детали для всех сообществ"""
+        total = len(communities)
         
         for i, community in enumerate(communities):
+            self.lbl_status.setText(f"Собираем контакты: {i+1}/{total} - {community['name']}")
+            
+            try:
+                details = self.fetch_community_details(community['screen_name'])
+                community.update(details)
+            except Exception:
+                pass
+            
+            # Задержка чтобы не перегружать VK
+            if i < total - 1:
+                time.sleep(1.5)
+        
+        return communities
+    
+    def fetch_community_details(self, screen_name: str) -> Dict:
+        """Получить детали конкретного сообщества"""
+        context = self.browser.new_context(
+            viewport={'width': 1920, 'height': 1080}
+        )
+        page = context.new_page()
+        
+        try:
+            url = f"https://vk.com/{screen_name}"
+            page.goto(url, wait_until='networkidle', timeout=15000)
+            time.sleep(1)
+            
+            details = {}
+            
+            # Извлекаем телефон
+            phone_elem = page.query_selector('a[href^="tel:"]')
+            if phone_elem:
+                href = phone_elem.get_attribute('href')
+                if href:
+                    details['phone'] = href.replace('tel:', '').strip()
+            
+            # Извлекаем email
+            email_pattern = r'[\w.+-]+@[\w.-]+\.\w{2,}'
+            emails = page.evaluate(f'document.body.innerText.match(/{email_pattern}/g) || []')
+            for email in emails:
+                if 'vk.com' not in email and 'vk.ru' not in email:
+                    details['email'] = email
+                    break
+            
+            # Извлекаем сайт
+            site_elem = page.query_selector('a[href^="http"]:not([href*="vk.com"])')
+            if site_elem:
+                href = site_elem.get_attribute('href')
+                if href and 'vk.com' not in href:
+                    details['site'] = href
+            
+            # Извлекаем количество участников
+            members_text = page.inner_text('body')
+            match = re.search(r'(\d[\d\s]*)\s*(?:участник|подписчик|человек)', members_text, re.I)
+            if match:
+                details['members'] = int(match.group(1).replace(' ', ''))
+            
+            # Извлекаем город
+            city_patterns = [
+                r'город[:\s]+([^,\n]+)',
+                r'г\.\s*([^,\n]+)'
+            ]
+            for pattern in city_patterns:
+                match = re.search(pattern, members_text, re.I)
+                if match:
+                    details['city'] = match.group(1).strip()
+                    break
+            
+            # Проверяем верификацию
+            if page.query_selector('[class*="verified"]'):
+                details['verified'] = True
+            
+            return details
+            
+        finally:
+            page.close()
+            context.close()
+    
+    def check_parsing_status(self):
+        """Проверка статуса парсинга и обновление GUI"""
+        if not self.parsing_active:
+            self.update_timer.stop()
+            self.progress_bar.setVisible(False)
+            self.btn_search.setEnabled(True)
+            
+            # Обновляем таблицу
+            self.update_table()
+    
+    def update_table(self):
+        """Обновить таблицу результатов"""
+        self.table.setRowCount(len(self.communities))
+        
+        for i, community in enumerate(self.communities):
             self.table.setItem(i, 0, QTableWidgetItem(str(i + 1)))
             self.table.setItem(i, 1, QTableWidgetItem(community['name']))
             self.table.setItem(i, 2, QTableWidgetItem(community['url']))
@@ -503,14 +445,7 @@ class MainWindow(QMainWindow):
             self.table.setItem(i, 7, QTableWidgetItem(community.get('city', '')))
             self.table.setItem(i, 8, QTableWidgetItem("✓" if community.get('verified') else ""))
         
-        self.btn_export.setEnabled(len(communities) > 0)
-    
-    def on_search_error(self, error: str):
-        """Ошибка поиска"""
-        self.progress_bar.setVisible(False)
-        self.btn_search.setEnabled(True)
-        self.lbl_status.setText(f"Ошибка: {error}")
-        QMessageBox.critical(self, "Ошибка поиска", error)
+        self.btn_export.setEnabled(len(self.communities) > 0)
     
     def export_to_excel(self):
         """Экспорт в Excel"""
@@ -520,7 +455,7 @@ class MainWindow(QMainWindow):
         file_path, _ = QFileDialog.getSaveFileName(
             self,
             "Сохранить Excel файл",
-            f"vk_communities_{datetime.now().strftime('%Y-%m-%d')}.xlsx",
+            f"vk_communities_{time.strftime('%Y-%m-%d')}.xlsx",
             "Excel файлы (*.xlsx)"
         )
         
@@ -585,13 +520,17 @@ class MainWindow(QMainWindow):
     
     def closeEvent(self, event):
         """Закрытие приложения"""
-        if self.parser_thread and self.parser_thread.isRunning():
-            self.parser_thread.stop()
-            self.parser_thread.wait()
-        
+        # Закрываем браузер
         if self.browser:
             try:
                 self.browser.close()
+            except:
+                pass
+        
+        # Останавливаем Playwright
+        if self.playwright:
+            try:
+                self.playwright.stop()
             except:
                 pass
         
