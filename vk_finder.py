@@ -33,41 +33,37 @@ USER_DATA_DIR = str(Path.home() / ".vk_finder_profile")
 
 
 class LoginThread(QThread):
-    """Поток для авторизации - создаёт свой Playwright"""
+    """Поток для авторизации через vk.com/login"""
     success = pyqtSignal()
     error = pyqtSignal(str)
     status = pyqtSignal(str)
-    waiting_for_confirmation = pyqtSignal()  # Сигнал что ждём подтверждения пользователем
+    waiting_for_confirmation = pyqtSignal()
     
     def run(self):
         try:
-            # Playwright создаётся ВНУТРИ этого потока
             with sync_playwright() as p:
                 self.status.emit("Запускаем браузер...")
                 
-                # Persistent context сохраняет cookies на диск
                 context = p.chromium.launch_persistent_context(
                     user_data_dir=USER_DATA_DIR,
                     headless=False,
                     args=['--start-maximized'],
-                    viewport={'width': 1920, 'height': 1080}
+                    viewport={'width': 1200, 'height': 800}
                 )
                 
                 page = context.pages[0] if context.pages else context.new_page()
                 page.goto("https://vk.com/login", wait_until='domcontentloaded')
                 
-                self.status.emit("Войдите в аккаунт ВКонтакте в открывшемся браузере")
+                self.status.emit("Войдите в аккаунт VK в браузере")
                 self.waiting_for_confirmation.emit()
                 
-                # Ждём пока пользователь нажмёт кнопку "Я авторизовался"
-                # Программа будет ждать сигнала из главного потока
+                # Ждём подтверждения от пользователя
                 while not hasattr(self, '_user_confirmed'):
                     time.sleep(0.5)
                 
-                # Даём время на завершение всех редиректов
-                time.sleep(3)
+                time.sleep(2)
                 
-                # Проверяем что авторизация успешна через cookies
+                # Проверяем авторизацию через cookies
                 cookies = context.cookies()
                 has_auth = any(cookie['name'] in ['remixsid', 'remixlang'] for cookie in cookies)
                 
@@ -77,11 +73,11 @@ class LoginThread(QThread):
                     context.close()
                     self.success.emit()
                 else:
-                    # Альтернативная проверка - пробуем зайти на главную
+                    # Альтернативная проверка
                     page.goto("https://vk.com/feed", wait_until='domcontentloaded', timeout=10000)
                     time.sleep(2)
                     
-                    if 'login' not in page.url and 'feed' in page.url:
+                    if 'login' not in page.url:
                         self.status.emit("Авторизация успешна!")
                         time.sleep(1)
                         context.close()
@@ -94,7 +90,7 @@ class LoginThread(QThread):
             self.error.emit(f"Ошибка: {e}")
     
     def confirm_login(self):
-        """Вызывается когда пользователь нажал кнопку 'Я авторизовался'"""
+        """Пользователь подтвердил авторизацию"""
         self._user_confirmed = True
 
 
@@ -401,12 +397,13 @@ class MainWindow(QMainWindow):
         
         self.btn_login = QPushButton("Войти ВКонтакте")
         self.btn_login.clicked.connect(self.start_login)
+        self.btn_login.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 8px 20px;")
         auth_layout.addWidget(self.btn_login)
         
         self.btn_confirm_login = QPushButton("✓ Я авторизовался")
         self.btn_confirm_login.clicked.connect(self.confirm_login)
         self.btn_confirm_login.setEnabled(False)
-        self.btn_confirm_login.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 5px 15px;")
+        self.btn_confirm_login.setStyleSheet("background-color: #4CAF50; color: white; font-weight: bold; padding: 8px 20px;")
         auth_layout.addWidget(self.btn_confirm_login)
         
         self.lbl_auth_status = QLabel("Статус: Не авторизован")
