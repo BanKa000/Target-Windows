@@ -1,0 +1,175 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>VK ID - Авторизация</title>
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            background: linear-gradient(135deg, #5181b8 0%, #3f6aa0 100%);
+        }
+        .container {
+            background: white;
+            padding: 50px 40px;
+            border-radius: 20px;
+            box-shadow: 0 20px 60px rgba(0,0,0,0.3);
+            text-align: center;
+            max-width: 480px;
+            width: 100%;
+        }
+        .logo {
+            width: 64px;
+            height: 64px;
+            background: #0077FF;
+            border-radius: 16px;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            margin: 0 auto 20px;
+        }
+        .logo svg { width: 36px; height: 36px; fill: white; }
+        h1 { color: #222; font-size: 22px; margin-bottom: 8px; }
+        .subtitle { color: #888; font-size: 14px; margin-bottom: 30px; }
+        #vkid-container {
+            min-height: 60px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            margin-bottom: 20px;
+        }
+        .status {
+            padding: 12px 20px;
+            border-radius: 10px;
+            font-size: 14px;
+            font-weight: 500;
+            display: none;
+        }
+        .status.success { background: #e8f5e9; color: #2e7d32; display: block; }
+        .status.error { background: #ffebee; color: #c62828; display: block; }
+        .status.info { background: #e3f2fd; color: #1565c0; display: block; }
+        .loading {
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            gap: 10px;
+            color: #888;
+            font-size: 14px;
+        }
+        .spinner {
+            width: 20px;
+            height: 20px;
+            border: 3px solid #eee;
+            border-top: 3px solid #0077FF;
+            border-radius: 50%;
+            animation: spin 0.8s linear infinite;
+        }
+        @keyframes spin { to { transform: rotate(360deg); } }
+        .alt-login {
+            margin-top: 20px;
+            padding-top: 20px;
+            border-top: 1px solid #eee;
+        }
+        .alt-login a {
+            color: #0077FF;
+            text-decoration: none;
+            font-size: 14px;
+        }
+        .alt-login a:hover { text-decoration: underline; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="logo">
+            <svg viewBox="0 0 24 24">
+                <path d="M12.785 16.241s.288-.032.436-.194c.136-.148.132-.427.132-.427s-.019-1.302.587-1.496c.596-.19 1.362 1.26 2.174 1.818.614.42 1.08.328 1.08.328l2.172-.03s1.136-.07.598-.964c-.044-.073-.314-.661-1.618-1.869-1.366-1.265-1.183-1.06.462-3.246.998-1.328 1.396-2.14 1.272-2.488-.12-.334-.858-.244-.858-.244l-2.448.015s-.182-.025-.316.056c-.132.078-.216.264-.216.264s-.388 1.032-.904 1.91c-1.092 1.856-1.528 1.952-1.706 1.836-.414-.268-.31-1.076-.31-1.65 0-1.792.272-2.54-.53-2.734-.266-.064-.462-.106-1.142-.113-.872-.009-1.61.003-2.028.208-.278.136-.492.44-.362.458.162.02.528.098.722.362.25.342.24 1.108.24 1.108s.144 2.11-.336 2.372c-.33.18-.782-.188-1.75-1.87-.496-.862-.87-1.814-.87-1.814s-.072-.178-.2-.274c-.156-.116-.374-.152-.374-.152l-2.326.015s-.35.01-.478.162c-.114.134-.01.412-.01.412s1.82 4.258 3.882 6.404c1.888 1.968 4.032 1.838 4.032 1.838h.972z"/>
+            </svg>
+        </div>
+        <h1>Вход через VK ID</h1>
+        <p class="subtitle">Используйте аккаунт ВКонтакте для входа в приложение</p>
+        
+        <div id="vkid-container">
+            <div class="loading">
+                <div class="spinner"></div>
+                <span>Загрузка...</span>
+            </div>
+        </div>
+        
+        <div id="status" class="status"></div>
+        
+        <div class="alt-login">
+            <a href="https://vk.com/login" target="_blank">Войти через vk.com/login →</a>
+        </div>
+    </div>
+
+    <script src="https://unpkg.com/@vkid/sdk@<3.0.0/dist-sdk/umd/index.js"></script>
+    <script type="text/javascript">
+        // Глобальные переменные для отслеживания состояния
+        window.authResult = null;
+        window.authError = null;
+        window.authState = 'loading'; // loading, waiting, success, error
+
+        function showStatus(message, type) {
+            const el = document.getElementById('status');
+            el.textContent = message;
+            el.className = 'status ' + type;
+        }
+
+        function vkidOnSuccess(data) {
+            console.log('VK ID: Успешная авторизация', data);
+            window.authResult = data;
+            window.authError = null;
+            window.authState = 'success';
+            showStatus('✅ Авторизация успешна! Можно закрыть это окно.', 'success');
+        }
+
+        function vkidOnError(error) {
+            console.error('VK ID: Ошибка', error);
+            window.authError = error;
+            window.authResult = null;
+            window.authState = 'error';
+            showStatus('❌ Ошибка: ' + (error.message || error.description || 'Неизвестная ошибка'), 'error');
+        }
+
+        if ('VKIDSDK' in window) {
+            const VKID = window.VKIDSDK;
+
+            VKID.Config.init({
+                app: 54819250,
+                redirectUrl: 'https://ParsingMyTest.com',
+                responseMode: VKID.ConfigResponseMode.Callback,
+                source: VKID.ConfigSource.LOWCODE,
+                scope: '',
+            });
+
+            const floatingOneTap = new VKID.FloatingOneTap();
+
+            floatingOneTap.render({
+                container: document.getElementById('vkid-container'),
+                appName: 'VK Community Finder',
+                showAlternativeLogin: true
+            })
+            .on(VKID.WidgetEvents.ERROR, vkidOnError)
+            .on(VKID.FloatingOneTapInternalEvents.LOGIN_SUCCESS, function (payload) {
+                showStatus('⏳ Обмен кода авторизации...', 'info');
+                window.authState = 'processing';
+
+                VKID.Auth.exchangeCode(payload.code, payload.device_id)
+                    .then(vkidOnSuccess)
+                    .catch(vkidOnError);
+            });
+
+            window.authState = 'waiting';
+            showStatus('Выберите способ входа', 'info');
+        } else {
+            window.authState = 'error';
+            showStatus('❌ Не удалось загрузить VK ID SDK. Проверьте интернет.', 'error');
+        }
+    </script>
+</body>
+</html>
