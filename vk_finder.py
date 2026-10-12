@@ -22,10 +22,12 @@ from PyQt6.QtWidgets import (QApplication, QMainWindow, QWidget, QVBoxLayout,
                              QTableWidget, QTableWidgetItem, 
                              QProgressBar, QMessageBox, QGroupBox, QSpinBox,
                              QComboBox, QCheckBox, QFileDialog, QHeaderView)
+from PyQt6.QtWidgets import QDialog, QFormLayout, QDialogButtonBox
 from PyQt6.QtCore import Qt, QThread, pyqtSignal
 from playwright.sync_api import sync_playwright
 import openpyxl
 from openpyxl.styles import Font, PatternFill
+import vk_api
 
 
 # Папка для сохранения cookies авторизации
@@ -94,64 +96,53 @@ class LoginThread(QThread):
         self._user_confirmed = True
 
 
-class VKIDLoginThread(QThread):
-    """Поток для авторизации через VK ID SDK"""
+class VKApiLoginThread(QThread):
+    """Поток для авторизации через vk_api (логин/пароль)"""
     success = pyqtSignal()
     error = pyqtSignal(str)
     status = pyqtSignal(str)
+    need_2fa = pyqtSignal()  # Требуется двухфакторная авторизация
     
+    def __init__(self, login: str, password: str, code: str = ''):
+        super().__init__()
+        self.login = login
+        self.password = password
+        self.code = code
+        
     def run(self):
         try:
-            with sync_playwright() as p:
-                self.status.emit("Запускаем браузер с VK ID...")
-                
-                context = p.chromium.launch_persistent_context(
-                    user_data_dir=USER_DATA_DIR,
-                    headless=False,
-                    args=['--start-maximized'],
-                    viewport={'width': 1200, 'height': 800}
+            self.status.emit("Авторизация через VK API...")
+            
+            # VK Standalone App ID (для десктопных приложений)
+            VK_APP_ID = 2685278
+            
+            try:
+                vk_session = vk_api.VkApi(
+                    login=self.login,
+                    password=self.password,
+                    app_id=VK_APP_ID,
+                    auth_token_code=self.code if self.code else None
                 )
+                vk_session.auth(token_only=False)
                 
-                page = context.pages[0] if context.pages else context.new_page()
+                # Сохраняем токен
+                token = vk_session.token['access_token']
+                token_file = Path(USER_DATA_DIR) / 'api_token.txt'
+                token_file.parent.mkdir(parents=True, exist_ok=True)
+                token_file.write_text(token)
                 
-                # Загружаем HTML страницу с VK ID SDK
-                html_path = Path(__file__).parent / 'vk_login.html'
-                page.goto(f'file://{html_path.absolute()}', wait_until='networkidle')
+                self.status.emit("Авторизация успешна!")
+                time.sleep(1)
+                self.success.emit()
                 
-                self.status.emit("Авторизуйтесь через VK ID в открывшемся окне")
-                
-                # Ждём успешной авторизации (проверяем window.authState)
-                max_wait = 300  # 5 минут
-                for _ in range(max_wait):
-                    time.sleep(1)
-                    
-                    # Проверяем состояние через JavaScript
-                    auth_state = page.evaluate('window.authState')
-                    auth_result = page.evaluate('window.authResult')
-                    auth_error = page.evaluate('window.authError')
-                    
-                    if auth_state == 'success' and auth_result:
-                        # Авторизация успешна
-                        self.status.emit("Авторизация успешна! Сохраняем сессию...")
-                        time.sleep(2)
-                        
-                        # Заходим на VK чтобы получить cookies
-                        page.goto('https://vk.com/feed', wait_until='domcontentloaded', timeout=15000)
-                        time.sleep(3)
-                        
-                        context.close()
-                        self.success.emit()
-                        return
-                    
-                    if auth_state == 'error' and auth_error:
-                        # Ошибка авторизации
-                        context.close()
-                        self.error.emit(f"Ошибка авторизации: {auth_error}")
-                        return
-                
-                # Таймаут
-                context.close()
-                self.error.emit("Время ожидания истекло. Попробуйте снова.")
+            except vk_api.AuthError as e:
+                error_msg = str(e)
+                if '2fa' in error_msg.lower() or 'two' in error_msg.lower():
+                    self.need_2fa.emit()
+                else:
+                    self.error.emit(f"Ошибка авторизации: {error_msg}")
+            except Exception as e:
+                self.error.emit(f"Ошибка: {e}")
                 
         except Exception as e:
             self.error.emit(f"Ошибка: {e}")
@@ -433,6 +424,62 @@ class SearchThread(QThread):
             page.close()
 
 
+class LoginDialog(QDialog):
+    """Диалог для ввода логина/пароля VK"""
+    
+    def __init__(self, parent=None, need_code=False):
+        super().__init__(parent)
+        self.setWindowTitle("Вход ВКонтакте" if not need_code else "Двухфакторная авторизация")
+        self.setFixedWidth(400)
+        
+        layout = QVBoxLayout(self)
+        
+        if need_code:
+            layout.addWidget(QLabel("Введите код из приложения для двухфакторной авторизации:"))
+            form = QFormLayout()
+            self.code_input = QLineEdit()
+            self.code_input.setPlaceholderText("123456")
+            form.addRow("Код:", self.code_input)
+            layout.addLayout(form)
+        else:
+            layout.addWidget(QLabel("Введите данные для входа в ВКонтакте:"))
+            form = QFormLayout()
+            
+            self.login_input = QLineEdit()
+            self.login_input.setPlaceholderText("Телефон или email")
+            form.addRow("Логин:", self.login_input)
+            
+            self.password_input = QLineEdit()
+            self.password_input.setEchoMode(QLineEdit.EchoMode.Password)
+            self.password_input.setPlaceholderText("Пароль")
+            form.addRow("Пароль:", self.password_input)
+            
+            layout.addLayout(form)
+            
+            hint = QLabel("💡 Пароль не сохраняется. Используется только для авторизации.")
+            hint.setStyleSheet("color: #888; font-size: 11px;")
+            hint.setWordWrap(True)
+            layout.addWidget(hint)
+        
+        buttons = QDialogButtonBox(
+            QDialogButtonBox.StandardButton.Ok | QDialogButtonBox.StandardButton.Cancel
+        )
+        buttons.accepted.connect(self.accept)
+        buttons.rejected.connect(self.reject)
+        layout.addWidget(buttons)
+        
+        if need_code:
+            self.code_input.setFocus()
+        else:
+            self.login_input.setFocus()
+    
+    def get_credentials(self):
+        """Вернуть введённые данные"""
+        if hasattr(self, 'code_input'):
+            return '', '', self.code_input.text().strip()
+        return self.login_input.text().strip(), self.password_input.text(), ''
+
+
 class MainWindow(QMainWindow):
     """Главное окно приложения"""
     
@@ -443,7 +490,7 @@ class MainWindow(QMainWindow):
         
         self.communities = []
         self.login_thread = None
-        self.vkid_login_thread = None
+        self.api_login_thread = None
         self.search_thread = None
         self.is_logged_in = False
         
@@ -466,12 +513,12 @@ class MainWindow(QMainWindow):
         self.btn_login.setStyleSheet("background-color: #0077FF; color: white; font-weight: bold; padding: 8px 20px;")
         auth_layout.addWidget(self.btn_login)
         
-        # Кнопка 2: Войти через VK ID SDK
-        self.btn_vkid_login = QPushButton("Войти через VK ID")
-        self.btn_vkid_login.clicked.connect(self.start_vkid_login)
-        self.btn_vkid_login.setToolTip("Авторизация через официальный виджет VK ID SDK")
-        self.btn_vkid_login.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 8px 20px;")
-        auth_layout.addWidget(self.btn_vkid_login)
+        # Кнопка 2: Войти по логину/паролю (через VK API)
+        self.btn_api_login = QPushButton("Войти по логину/паролю")
+        self.btn_api_login.clicked.connect(self.start_api_login)
+        self.btn_api_login.setToolTip("Быстрая авторизация через VK API (логин/пароль)")
+        self.btn_api_login.setStyleSheet("background-color: #FF9800; color: white; font-weight: bold; padding: 8px 20px;")
+        auth_layout.addWidget(self.btn_api_login)
         
         # Кнопка подтверждения (для обычной авторизации)
         self.btn_confirm_login = QPushButton("✓ Я авторизовался")
@@ -614,19 +661,42 @@ class MainWindow(QMainWindow):
         self.login_thread.waiting_for_confirmation.connect(self.on_waiting_for_confirmation)
         self.login_thread.start()
     
-    def start_vkid_login(self):
-        """Начать авторизацию через VK ID SDK"""
-        self.btn_login.setEnabled(False)
-        self.btn_vkid_login.setEnabled(False)
-        self.btn_confirm_login.setEnabled(False)
-        self.lbl_auth_status.setText("Статус: Запуск браузера с VK ID...")
-        self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
-        
-        self.vkid_login_thread = VKIDLoginThread()
-        self.vkid_login_thread.success.connect(self.on_login_success)
-        self.vkid_login_thread.error.connect(self.on_login_error)
-        self.vkid_login_thread.status.connect(self.on_login_status)
-        self.vkid_login_thread.start()
+    def start_api_login(self):
+        """Начать авторизацию через VK API (логин/пароль)"""
+        dialog = LoginDialog(self)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            login, password, code = dialog.get_credentials()
+            
+            self.btn_login.setEnabled(False)
+            self.btn_api_login.setEnabled(False)
+            self.btn_confirm_login.setEnabled(False)
+            self.lbl_auth_status.setText("Статус: Авторизация через VK API...")
+            self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
+            
+            self.api_login_thread = VKApiLoginThread(login, password, code)
+            self.api_login_thread.success.connect(self.on_login_success)
+            self.api_login_thread.error.connect(self.on_login_error)
+            self.api_login_thread.status.connect(self.on_login_status)
+            self.api_login_thread.need_2fa.connect(self.on_need_2fa)
+            self.api_login_thread.start()
+    
+    def on_need_2fa(self):
+        """Требуется двухфакторная авторизация"""
+        dialog = LoginDialog(self, need_code=True)
+        if dialog.exec() == QDialog.DialogCode.Accepted:
+            login, password, code = dialog.get_credentials()
+            
+            self.api_login_thread = VKApiLoginThread(login, password, code)
+            self.api_login_thread.success.connect(self.on_login_success)
+            self.api_login_thread.error.connect(self.on_login_error)
+            self.api_login_thread.status.connect(self.on_login_status)
+            self.api_login_thread.need_2fa.connect(self.on_need_2fa)
+            self.api_login_thread.start()
+        else:
+            self.btn_login.setEnabled(True)
+            self.btn_api_login.setEnabled(True)
+            self.lbl_auth_status.setText("Статус: Авторизация отменена")
+            self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
     
     def on_waiting_for_confirmation(self):
         """Браузер открыт, ждём подтверждения от пользователя"""
@@ -653,7 +723,7 @@ class MainWindow(QMainWindow):
         self.lbl_auth_status.setStyleSheet("color: green; font-weight: bold;")
         self.btn_search.setEnabled(True)
         self.btn_login.setEnabled(True)
-        self.btn_vkid_login.setEnabled(True)
+        self.btn_api_login.setEnabled(True)
         self.btn_confirm_login.setEnabled(False)
         self.btn_reset_auth.setVisible(True)
         
@@ -670,7 +740,7 @@ class MainWindow(QMainWindow):
         self.lbl_auth_status.setText(f"Статус: Ошибка")
         self.lbl_auth_status.setStyleSheet("color: red; font-weight: bold;")
         self.btn_login.setEnabled(True)
-        self.btn_vkid_login.setEnabled(True)
+        self.btn_api_login.setEnabled(True)
         self.btn_confirm_login.setEnabled(False)
         QMessageBox.critical(self, "Ошибка авторизации", error)
     
@@ -862,9 +932,9 @@ class MainWindow(QMainWindow):
             self.login_thread.quit()
             self.login_thread.wait(3000)
         
-        if self.vkid_login_thread and self.vkid_login_thread.isRunning():
-            self.vkid_login_thread.quit()
-            self.vkid_login_thread.wait(3000)
+        if self.api_login_thread and self.api_login_thread.isRunning():
+            self.api_login_thread.quit()
+            self.api_login_thread.wait(3000)
         
         if self.search_thread and self.search_thread.isRunning():
             self.search_thread.stop()
