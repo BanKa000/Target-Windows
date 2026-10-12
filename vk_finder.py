@@ -649,7 +649,7 @@ class MainWindow(QMainWindow):
     def start_login(self):
         """Начать авторизацию через vk.com/login"""
         self.btn_login.setEnabled(False)
-        self.btn_vkid_login.setEnabled(False)
+        self.btn_api_login.setEnabled(False)
         self.btn_confirm_login.setEnabled(False)
         self.lbl_auth_status.setText("Статус: Запуск браузера...")
         self.lbl_auth_status.setStyleSheet("color: orange; font-weight: bold;")
