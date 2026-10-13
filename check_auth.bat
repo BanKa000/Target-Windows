@@ -20,9 +20,10 @@ if %errorlevel% equ 0 (
 echo.
 
 REM Проверяем наличие .auth()
-findstr /i "vk_session.auth()" vk_finder.py >nul 2>&1
+findstr /i ".auth()" vk_finder.py >nul 2>&1
 if %errorlevel% equ 0 (
-    echo ✅ Найден вызов vk_session.auth()
+    echo ✅ Найден вызов .auth()
+    findstr /i ".auth()" vk_finder.py
 ) else (
     echo ❌ НЕ найден вызов .auth()!
 )

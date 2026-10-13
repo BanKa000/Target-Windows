@@ -97,11 +97,23 @@ fix_dependencies.bat
 ```
 Этот скрипт обновит все зависимости до совместимых версий.
 
+**Программа не запускается:**
+```
+diagnose.bat
+```
+Этот скрипт проверит все компоненты и покажет, что именно не работает.
+
+**Тест компонентов:**
+```
+python test_components.py
+```
+Проверит каждый модуль отдельно и покажет, какой из них не работает.
+
 **Ошибка установки:**
 ```
 python -m pip install --upgrade pip
 pip install --upgrade -r requirements.txt
-playwright install chromium
+python -m playwright install chromium
 ```
 
 **Капча от VK:**
