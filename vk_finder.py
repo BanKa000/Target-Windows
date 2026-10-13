@@ -141,20 +141,16 @@ class ApiLoginThread(QThread):
         try:
             self.status.emit("Авторизация через VK API...")
             
-            vk_session = vk_api.VkApi(
-                login=self.login,
-                password=self.password,
-                app_id=2685278
-            )
+            # Простая авторизация - только логин и пароль
+            vk_session = vk_api.VkApi(login=self.login, password=self.password)
             
-            # Если есть код 2FA, передаём его через функцию
+            # Если есть код 2FA, используем auth_handler
             if self.code:
-                def auth_handler():
-                    return self.code, True
-                vk_session.auth_handler = auth_handler
+                vk_session.auth_handler = lambda: (self.code, True)
             
             vk_session.auth()
             
+            # Сохраняем токен
             token = vk_session.token['access_token']
             token_file = Path(USER_DATA_DIR) / 'api_token.txt'
             token_file.parent.mkdir(parents=True, exist_ok=True)
@@ -163,10 +159,11 @@ class ApiLoginThread(QThread):
             self.success.emit()
             
         except vk_api.AuthError as e:
-            if '2fa' in str(e).lower():
+            error_msg = str(e).lower()
+            if '2fa' in error_msg or 'two' in error_msg:
                 self.need_2fa.emit()
             else:
-                self.error.emit(str(e))
+                self.error.emit(f"Ошибка авторизации: {e}")
         except Exception as e:
             self.error.emit(f"Ошибка: {e}")
 
