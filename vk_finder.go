@@ -117,18 +117,58 @@ func validateToken() bool {
 	params := url.Values{}
 	params.Set("access_token", accessToken)
 	params.Set("v", VK_API_VERSION)
-
+	
 	resp, err := http.Get("https://api.vk.com/method/users.get?" + params.Encode())
 	if err != nil {
-		fmt.Printf("Ошибка: %v\n", err)
+		fmt.Printf("❌ Ошибка подключения: %v\n", err)
 		return false
 	}
 	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-	return !strings.Contains(string(body), "error")
+	
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		fmt.Printf("❌ Ошибка чтения ответа: %v\n", err)
+		return false
+	}
+	
+	// Парсим JSON ответ
+	var result struct {
+		Response []struct {
+			ID        int    `json:"id"`
+			FirstName string `json:"first_name"`
+			LastName  string `json:"last_name"`
+		} `json:"response"`
+		Error *struct {
+			ErrorCode int    `json:"error_code"`
+			ErrorMsg  string `json:"error_msg"`
+		} `json:"error"`
+	}
+	
+	if err := json.Unmarshal(body, &result); err != nil {
+		fmt.Printf("❌ Ошибка парсинга ответа: %v\n", err)
+		fmt.Printf("Ответ сервера: %s\n", string(body))
+		return false
+	}
+	
+	// Проверяем наличие ошибки
+	if result.Error != nil {
+		fmt.Printf("❌ Ошибка VK API: %s\n", result.Error.ErrorMsg)
+		fmt.Printf("Код ошибки: %d\n", result.Error.ErrorCode)
+		return false
+	}
+	
+	// Проверяем наличие данных
+	if len(result.Response) == 0 {
+		fmt.Printf("❌ Не удалось получить данные пользователя\n")
+		return false
+	}
+	
+	// Успех!
+	user := result.Response[0]
+	fmt.Printf("✅ Авторизация успешна!\n")
+	fmt.Printf("Пользователь: %s %s (ID: %d)\n", user.FirstName, user.LastName, user.ID)
+	return true
 }
-
 func searchCommunities() {
 	reader := bufio.NewReader(os.Stdin)
 	
