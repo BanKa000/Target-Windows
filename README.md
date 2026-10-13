@@ -99,10 +99,11 @@ run_go.bat
 - Проверьте правильность ввода
 - Если включена 2FA - программа автоматически запросит код из приложения VK
 
-**Ошибка "invalid_client":**
-- Эта ошибка больше не возникает - программа использует OAuth через браузер
-- Если проблема сохраняется, используйте опцию "2. Использовать существующий токен"
-- Получите токен вручную: откройте URL из раздела "Получение токена вручную"
+**Ошибка "invalid_client" или "incorrect app":**
+- VK может блокировать некоторые app_id для OAuth
+- Используйте опцию "2. Использовать существующий токен"
+- Получите токен вручную через URL из раздела "Получение токена вручную"
+- Попробуйте разные app_id (5157339, 3697615, 6121269)
 - Подробная инструкция: [FIX_INVALID_CLIENT.md](FIX_INVALID_CLIENT.md)
 
 **Браузер не открывается:**
@@ -198,14 +199,30 @@ vk-community-finder/
 
 ## Получение токена вручную
 
-Если автоматическая авторизация не работает:
+Если автоматическая авторизация не работает или вы видите ошибку "incorrect app":
 
-1. Откройте в браузере:
+### Шаг 1: Откройте URL для получения токена
+
+Скопируйте и откройте в браузере один из этих URL:
+
+**Вариант 1 (рекомендуется):**
 ```
-https://oauth.vk.com/authorize?client_id=2274003&scope=offline&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+https://oauth.vk.com/authorize?client_id=5157339&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
 ```
 
-2. Авторизуйтесь в VK
+**Вариант 2:**
+```
+https://oauth.vk.com/authorize?client_id=3697615&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+**Вариант 3:**
+```
+https://oauth.vk.com/authorize?client_id=6121269&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+### Шаг 2: Авторизуйтесь в VK
+
+Войдите в свой аккаунт VK любым способом (логин/пароль, QR-код, и т.д.)
 
 3. После авторизации вы будете перенаправлены на URL вида:
 ```

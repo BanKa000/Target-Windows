@@ -172,12 +172,44 @@ go build -o vk_finder.exe vk_finder.go
 
 - **Библиотека**: github.com/SevereCloud/vksdk/v3 v3.0.0
 - **Метод авторизации**: OAuth Implicit Flow через браузер
-- **App ID**: 2274003 (VK для Android)
+- **App ID**: 2685278 (Kate Mobile) - может быть заблокирован VK
 - **Client Secret**: не требуется
 - **Метод поиска**: `vk.Request("groups.search", params)`
 - **Функция авторизации**: `getVKTokenViaBrowser(clientID)`
 - **Локальный сервер**: запускается на случайном порту для получения токена
 - **Таймаут**: 5 минут на авторизацию
+
+## Ошибка "incorrect app. Unavailable for apps with direct auth."
+
+Если вы видите эту ошибку, VK заблокировал использование app_id для OAuth.
+
+### Решения:
+
+**1. Используйте альтернативные app_id для получения токена вручную:**
+
+Откройте в браузере один из этих URL:
+
+```
+https://oauth.vk.com/authorize?client_id=5157339&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+```
+https://oauth.vk.com/authorize?client_id=3697615&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+```
+https://oauth.vk.com/authorize?client_id=6121269&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+После авторизации скопируйте токен из URL и вставьте в программу (опция "2").
+
+**2. Создайте собственное приложение в VK:**
+
+1. Перейдите на https://dev.vk.com/ru/admin/apps-list
+2. Создайте новое приложение (тип: "Веб-сайт" или "Standalone")
+3. Получите app_id вашего приложения
+4. Измените константу `VK_APP_ID` в файле `vk_finder.go`
+5. Пересоберите программу: `go build -o vk_finder.exe vk_finder.go`
 
 ## Документация
 
@@ -187,4 +219,22 @@ go build -o vk_finder.exe vk_finder.go
 ---
 
 **Дата исправления**: 2026  
-**Версия**: 1.4 (OAuth Implicit Flow через браузер)
+**Версия**: 1.5 (добавлены альтернативные app_id и инструкция по созданию приложения)
+
+## Быстрое решение
+
+Если видите ошибку "incorrect app", используйте один из этих URL для получения токена вручную:
+
+```
+https://oauth.vk.com/authorize?client_id=5157339&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+```
+https://oauth.vk.com/authorize?client_id=3697615&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+```
+https://oauth.vk.com/authorize?client_id=6121269&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token
+```
+
+После авторизации скопируйте токен из URL и вставьте в программу (опция "2").
