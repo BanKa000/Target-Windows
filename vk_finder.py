@@ -141,14 +141,27 @@ class ApiLoginThread(QThread):
         try:
             self.status.emit("Авторизация через VK API...")
             
-            # Простая авторизация - только логин и пароль
-            vk_session = vk_api.VkApi(login=self.login, password=self.password)
+            # Создаём сессию VK API
+            # Используем минимальные параметры для избежания ошибок
+            vk_session = vk_api.VkApi(
+                login=self.login,
+                password=self.password,
+                app_id=2685278,  # Standalone приложение
+                scope='offline'  # Оффлайн токен
+            )
             
             # Если есть код 2FA, используем auth_handler
             if self.code:
-                vk_session.auth_handler = lambda: (self.code, True)
+                def auth_handler():
+                    return self.code, True
+                vk_session.auth_handler = auth_handler
             
+            # Выполняем авторизацию
             vk_session.auth()
+            
+            # Проверяем, что токен получен
+            if not vk_session.token or 'access_token' not in vk_session.token:
+                raise Exception("Не удалось получить токен доступа")
             
             # Сохраняем токен
             token = vk_session.token['access_token']
@@ -160,12 +173,25 @@ class ApiLoginThread(QThread):
             
         except vk_api.AuthError as e:
             error_msg = str(e).lower()
-            if '2fa' in error_msg or 'two' in error_msg:
+            # Обработка двухфакторной авторизации
+            if '2fa' in error_msg or 'two' in error_msg or 'code' in error_msg:
                 self.need_2fa.emit()
+            # Обработка неверных учётных данных
+            elif 'invalid' in error_msg or 'password' in error_msg:
+                self.error.emit("Неверный логин или пароль")
+            # Обработка заблокированного аккаунта
+            elif 'blocked' in error_msg:
+                self.error.emit("Аккаунт заблокирован")
             else:
                 self.error.emit(f"Ошибка авторизации: {e}")
         except Exception as e:
-            self.error.emit(f"Ошибка: {e}")
+            # Обработка всех остальных ошибок
+            error_msg = str(e)
+            # Игнорируем ошибки JavaScript от VK
+            if 'window.init' in error_msg or 'javascript' in error_msg.lower():
+                self.error.emit("VK вернул ошибку. Попробуйте использовать синюю кнопку 'Войти ВКонтакте'")
+            else:
+                self.error.emit(f"Ошибка: {error_msg}")
 
 
 class SearchThread(QThread):
@@ -669,10 +695,29 @@ class MainWindow(QMainWindow):
 
 
 def main():
-    app = QApplication(sys.argv)
-    window = MainWindow()
-    window.show()
-    sys.exit(app.exec())
+    try:
+        app = QApplication(sys.argv)
+        window = MainWindow()
+        window.show()
+        sys.exit(app.exec())
+    except Exception as e:
+        error_msg = str(e)
+        if 'window.init' in error_msg or 'javascript' in error_msg.lower():
+            print("=" * 60)
+            print("ОШИБКА: VK вернул JavaScript ошибку")
+            print("=" * 60)
+            print()
+            print("Решение:")
+            print("Используйте СИНЮЮ кнопку 'Войти ВКонтакте'")
+            print("вместо оранжевой 'Войти по логину/паролю'")
+            print()
+            print("Синяя кнопка открывает браузер и работает")
+            print("стабильнее при проблемах с VK API.")
+            print("=" * 60)
+            sys.exit(1)
+        else:
+            print(f"Критическая ошибка: {error_msg}")
+            sys.exit(1)
 
 
 if __name__ == "__main__":
