@@ -154,6 +154,14 @@ func validateToken() bool {
 	if result.Error != nil {
 		fmt.Printf("❌ Ошибка VK API: %s\n", result.Error.ErrorMsg)
 		fmt.Printf("Код ошибки: %d\n", result.Error.ErrorCode)
+		
+		// Специальная обработка для ошибки Flood control
+		if result.Error.ErrorCode == 9 {
+			fmt.Println("\n⚠️  VK временно заблокировал запросы из-за слишком частых попыток.")
+			fmt.Println("   Подождите 15-30 минут и попробуйте снова.")
+			fmt.Println("   Или получите новый токен по инструкции в README.md")
+		}
+		
 		return false
 	}
 	
