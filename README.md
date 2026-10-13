@@ -81,10 +81,16 @@ check_auth.bat
 
 ### Другие проблемы
 
+**Ошибка greenlet с Python 3.15:**
+```
+fix_dependencies.bat
+```
+Этот скрипт обновит все зависимости до совместимых версий.
+
 **Ошибка установки:**
 ```
 python -m pip install --upgrade pip
-pip install -r requirements.txt
+pip install --upgrade -r requirements.txt
 playwright install chromium
 ```
 
@@ -118,6 +124,8 @@ vk-community-finder/
 ## Требования
 
 - Windows 10/11 (64-bit)
-- Python 3.10+
+- Python 3.10+ (рекомендуется 3.13 или 3.14 для стабильности)
 - ~500 МБ свободного места
 - Интернет-соединение
+
+**⚠️ Python 3.15:** Если у вас Python 3.15, запустите `fix_dependencies.bat` для установки совместимых версий зависимостей.

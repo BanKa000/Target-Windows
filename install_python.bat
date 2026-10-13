@@ -24,7 +24,7 @@ python --version
 echo.
 
 echo [2/3] Установка зависимостей Python...
-pip install -r requirements.txt
+pip install --upgrade -r requirements.txt
 if %errorlevel% neq 0 (
     echo Ошибка установки зависимостей!
     pause
