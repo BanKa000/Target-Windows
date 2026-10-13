@@ -5,13 +5,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"net"
 	"net/http"
 	"net/url"
 	"os"
-	"os/exec"
 	"regexp"
-	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -23,7 +20,6 @@ import (
 // VK API конфигурация
 const (
 	VK_API_VERSION = "5.199"
-	VK_APP_ID      = 2685278 // Kate Mobile (поддерживает OAuth)
 )
 
 // Структуры данных
@@ -49,136 +45,6 @@ type VKResponse struct {
 		ErrorCode int    `json:"error_code"`
 		ErrorMsg  string `json:"error_msg"`
 	} `json:"error"`
-}
-
-// openBrowser открывает URL в системном браузере
-func openBrowser(url string) error {
-	var cmd string
-	var args []string
-
-	switch runtime.GOOS {
-	case "windows":
-		cmd = "cmd"
-		args = []string{"/c", "start", url}
-	case "darwin": // macOS
-		cmd = "open"
-		args = []string{url}
-	case "linux":
-		cmd = "xdg-open"
-		args = []string{url}
-	default:
-		return fmt.Errorf("неподдерживаемая операционная система")
-	}
-
-	return exec.Command(cmd, args...).Start()
-}
-
-// getVKTokenViaBrowser использует Implicit Flow через браузер
-func getVKTokenViaBrowser(clientID int) (string, int64, error) {
-	// Находим свободный порт
-	listener, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		return "", 0, fmt.Errorf("не удалось найти свободный порт: %v", err)
-	}
-	port := listener.Addr().(*net.TCPAddr).Port
-	listener.Close()
-
-	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
-
-	// Создаём канал для получения токена
-	tokenChan := make(chan string, 1)
-	errorChan := make(chan error, 1)
-
-	// Запускаем локальный HTTP сервер
-	server := &http.Server{
-		Addr: fmt.Sprintf("127.0.0.1:%d", port),
-		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			// Извлекаем токен из URL (fragment)
-			fragment := r.URL.Fragment
-			if fragment == "" {
-				// VK может передать токен в query параметрах
-				fragment = r.URL.RawQuery
-			}
-
-			// Парсим параметры из fragment/query
-			params, _ := url.ParseQuery(fragment)
-			accessToken := params.Get("access_token")
-			userID := params.Get("user_id")
-
-			if accessToken == "" {
-				errorChan <- fmt.Errorf("токен не получен")
-				http.Error(w, "Ошибка: токен не получен", http.StatusBadRequest)
-				return
-			}
-
-			// Отправляем успешный ответ
-			w.Header().Set("Content-Type", "text/html; charset=utf-8")
-			w.Write([]byte(`
-				<!DOCTYPE html>
-				<html>
-				<head>
-					<meta charset="UTF-8">
-					<title>Авторизация успешна</title>
-					<style>
-						body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
-						.success { color: green; font-size: 24px; }
-					</style>
-				</head>
-				<body>
-					<div class="success">✅ Авторизация успешна!</div>
-					<p>Можете закрыть это окно и вернуться в программу.</p>
-				</body>
-				</html>
-			`))
-
-			// Отправляем токен в канал
-			tokenChan <- accessToken + "|" + userID
-		}),
-	}
-
-	go func() {
-		if err := server.ListenAndServe(); err != http.ErrServerClosed {
-			errorChan <- err
-		}
-	}()
-
-	// Формируем URL для авторизации
-	authURL := fmt.Sprintf(
-		"https://oauth.vk.com/authorize?client_id=%d&redirect_uri=%s&display=page&scope=offline,groups&response_type=token&v=%s",
-		clientID,
-		url.QueryEscape(redirectURI),
-		VK_API_VERSION,
-	)
-
-	// Открываем браузер
-	fmt.Println("\n🌐 Открываю браузер для авторизации...")
-	if err := openBrowser(authURL); err != nil {
-		server.Close()
-		return "", 0, fmt.Errorf("не удалось открыть браузер: %v\nОткройте URL вручную: %s", err, authURL)
-	}
-
-	fmt.Println("✅ Браузер открыт. Авторизуйтесь в VK.")
-	fmt.Println("⏳ Ожидаю получения токена...")
-
-	// Ждём токен с таймаутом
-	select {
-	case result := <-tokenChan:
-		server.Close()
-		parts := strings.Split(result, "|")
-		if len(parts) != 2 {
-			return "", 0, fmt.Errorf("неверный формат токена")
-		}
-		userID, _ := strconv.ParseInt(parts[1], 10, 64)
-		return parts[0], userID, nil
-
-	case err := <-errorChan:
-		server.Close()
-		return "", 0, err
-
-	case <-time.After(5 * time.Minute):
-		server.Close()
-		return "", 0, fmt.Errorf("таймаут: авторизация не завершена за 5 минут")
-	}
 }
 
 // Глобальные переменные
@@ -223,36 +89,28 @@ func main() {
 
 func login() bool {
 	fmt.Println("\n--- Авторизация ВКонтакте ---")
-	fmt.Println("1. Войти через браузер (рекомендуется)")
-	fmt.Println("2. Использовать существующий токен")
-	fmt.Print("Выберите (1-2): ")
-
-	var choice string
-	fmt.Scanln(&choice)
-
-	if choice == "2" {
-		fmt.Print("Введите токен доступа: ")
-		fmt.Scanln(&accessToken)
-		return validateToken()
-	}
-
-	fmt.Println("\n⏳ Выполняется авторизация через браузер...")
-
-	// Используем Implicit Flow через браузер
-	token, userID, err := getVKTokenViaBrowser(VK_APP_ID)
-	if err != nil {
-		fmt.Printf("❌ Ошибка авторизации: %v\n", err)
-		fmt.Println("\nВозможные причины:")
-		fmt.Println("- Браузер не открылся (попробуйте открыть URL вручную)")
-		fmt.Println("- Авторизация не завершена")
-		fmt.Println("- Используйте опцию '2' для ввода токена вручную")
+	fmt.Println("\n📋 Как получить токен:")
+	fmt.Println("1. Откройте в браузере эту ссылку:")
+	fmt.Println("   https://oauth.vk.com/authorize?client_id=2685278&scope=offline,groups&redirect_uri=https://oauth.vk.com/blank.html&display=page&response_type=token&v=5.199")
+	fmt.Println("\n2. Авторизуйтесь в ВКонтакте")
+	fmt.Println("\n3. После авторизации вы попадёте на страницу с адресом вида:")
+	fmt.Println("   https://oauth.vk.com/blank.html#access_token=ТОКЕН_ЗДЕСЬ&expires_in=0&user_id=ВАШ_ID")
+	fmt.Println("\n4. Скопируйте значение access_token (длинная строка между access_token= и &)")
+	fmt.Println("\n5. Вставьте его ниже:")
+	fmt.Println("─────────────────────────────────────────")
+	
+	reader := bufio.NewReader(os.Stdin)
+	fmt.Print("\nВведите токен доступа: ")
+	token, _ := reader.ReadString('\n')
+	token = strings.TrimSpace(token)
+	
+	if token == "" {
+		fmt.Println("❌ Токен не введён")
 		return false
 	}
 
 	accessToken = token
-	fmt.Println("✅ Авторизация успешна!")
-	fmt.Printf("Токен получен для пользователя ID: %d\n", userID)
-	return true
+	return validateToken()
 }
 
 func validateToken() bool {
