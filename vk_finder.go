@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/SevereCloud/vksdk/v3/api"
-	"github.com/SevereCloud/vksdk/v3/oauth"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -47,6 +46,48 @@ type VKResponse struct {
 		ErrorCode int    `json:"error_code"`
 		ErrorMsg  string `json:"error_msg"`
 	} `json:"error"`
+}
+
+type TokenResponse struct {
+	AccessToken string `json:"access_token"`
+	UserID      int64  `json:"user_id"`
+	Error       string `json:"error"`
+	ErrorDesc   string `json:"error_description"`
+}
+
+// getVKToken выполняет прямой HTTP-запрос для получения токена VK
+func getVKToken(login, password, clientID string) (string, int64, error) {
+	data := url.Values{
+		"grant_type": {"password"},
+		"client_id":  {clientID},
+		"username":   {login},
+		"password":   {password},
+		"scope":      {"offline,friends,groups"},
+		"v":          {VK_API_VERSION},
+	}
+
+	resp, err := http.PostForm("https://oauth.vk.com/token", data)
+	if err != nil {
+		return "", 0, err
+	}
+	defer resp.Body.Close()
+
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
+		return "", 0, err
+	}
+
+	var tokenResp TokenResponse
+	if err := json.Unmarshal(body, &tokenResp); err != nil {
+		return "", 0, fmt.Errorf("ошибка парсинга ответа: %v", err)
+	}
+
+	// Проверяем наличие ошибки в ответе
+	if tokenResp.Error != "" {
+		return "", 0, fmt.Errorf("VK API error: %s - %s", tokenResp.Error, tokenResp.ErrorDesc)
+	}
+
+	return tokenResp.AccessToken, tokenResp.UserID, nil
 }
 
 // Глобальные переменные
@@ -116,14 +157,8 @@ func login() bool {
 
 	fmt.Println("\n⏳ Выполняется авторизация через VK API...")
 
-	// Используем Direct Auth из oauth пакета vksdk
-	auth, err := oauth.DirectAuth(&oauth.Params{
-		Login:        login,
-		Password:     password,
-		ClientID:     VK_APP_ID,
-		ClientSecret: "", // Для официальных приложений VK не требуется
-		Scope:        api.ScopeOffline,
-	})
+	// Используем прямой HTTP-запрос для получения токена
+	token, userID, err := getVKToken(login, password, fmt.Sprintf("%d", VK_APP_ID))
 	if err != nil {
 		fmt.Printf("❌ Ошибка авторизации: %v\n", err)
 		fmt.Println("\nВозможные причины:")
@@ -134,9 +169,9 @@ func login() bool {
 		return false
 	}
 
-	accessToken = auth.AccessToken
+	accessToken = token
 	fmt.Println("✅ Авторизация успешна!")
-	fmt.Printf("Токен получен для пользователя ID: %d\n", auth.UserID)
+	fmt.Printf("Токен получен для пользователя ID: %d\n", userID)
 	return true
 }
 
