@@ -33,7 +33,7 @@ if %errorlevel% neq 0 (
 
 echo.
 echo [3/3] Установка браузеров Playwright...
-playwright install chromium
+python -m playwright install chromium
 if %errorlevel% neq 0 (
     echo Ошибка установки браузеров!
     pause
