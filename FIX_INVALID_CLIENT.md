@@ -1,8 +1,8 @@
-# Инструкция по исправлению ошибки "invalid_client"
+# Инструкция по исправлению ошибки "invalid_client" (обновлено для v3 SDK)
 
 ## Проблема
 
-Ошибка `invalid_client - client_secret is undefined` возникала из-за использования несуществующего пакета `github.com/SevereCloud/vksdk/v3/auth`.
+Ошибка `invalid_client - client_secret is undefined` возникала из-за использования несуществующего пакета `github.com/SevereCloud/vksdk/v3/auth`. В v3 SDK структура изменилась, и DirectAuth находится в пакете `oauth`.
 
 ## Решение
 
@@ -24,8 +24,8 @@ import (
 **Стало:**
 ```go
 import (
-    "github.com/SevereCloud/vksdk/v3"       // ✅ Правильный импорт
     "github.com/SevereCloud/vksdk/v3/api"
+    "github.com/SevereCloud/vksdk/v3/oauth" // ✅ Правильный пакет для DirectAuth
     "github.com/xuri/excelize/v2"
 )
 ```
@@ -40,7 +40,7 @@ token, err := client.Login(login, password)
 
 **Стало:**
 ```go
-token, err := vksdk.DirectAuth(&vksdk.DirectAuthParams{
+auth, err := oauth.DirectAuth(&oauth.Params{
     Login:        login,
     Password:     password,
     ClientID:     VK_APP_ID,
@@ -59,6 +59,19 @@ VK_APP_ID = "2274003" // Строка
 **Стало:**
 ```go
 VK_APP_ID = 2274003 // Число (int)
+```
+
+### 4. Вызов API для поиска сообществ (vk_finder.go)
+
+**Было:**
+```go
+resp, err := vk.Groups.Search(params)
+```
+
+**Стало:**
+```go
+resp, err := vk.Request("groups.search", params)
+// Парсинг ответа через json.Unmarshal
 ```
 
 ## Как использовать
@@ -92,8 +105,9 @@ run_go.bat
 
 ✅ **Не требует client_secret** - используется официальное приложение VK  
 ✅ **Автоматическая обработка 2FA** - библиотека сама запрашивает код  
-✅ **Правильная работа с VK API** - используется официальный метод из vksdk  
+✅ **Правильная работа с VK API** - используется `oauth.DirectAuth` из vksdk/v3  
 ✅ **Нет ошибок "invalid_client"** - правильная реализация Direct Auth  
+✅ **Прямой вызов API** - используется `vk.Request()` вместо устаревших методов  
 
 ## Если возникли проблемы
 
@@ -116,9 +130,11 @@ go build -o vk_finder.exe vk_finder.go
 ## Технические детали
 
 - **Библиотека**: github.com/SevereCloud/vksdk/v3 v3.0.0
-- **Метод авторизации**: `vksdk.DirectAuth`
+- **Пакет авторизации**: `github.com/SevereCloud/vksdk/v3/oauth`
+- **Метод авторизации**: `oauth.DirectAuth`
 - **App ID**: 2274003 (VK для Android)
 - **Client Secret**: не требуется для официальных приложений
+- **Метод поиска**: `vk.Request("groups.search", params)`
 
 ## Документация
 
@@ -128,4 +144,4 @@ go build -o vk_finder.exe vk_finder.go
 ---
 
 **Дата исправления**: 2026  
-**Версия**: 1.1 (исправлена ошибка invalid_client)
+**Версия**: 1.2 (обновлено для v3 SDK - oauth.DirectAuth)

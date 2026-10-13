@@ -13,8 +13,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/SevereCloud/vksdk/v3"
 	"github.com/SevereCloud/vksdk/v3/api"
+	"github.com/SevereCloud/vksdk/v3/oauth"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -116,8 +116,8 @@ func login() bool {
 
 	fmt.Println("\n⏳ Выполняется авторизация через VK API...")
 
-	// Используем Direct Auth из vksdk
-	token, err := vksdk.DirectAuth(&vksdk.DirectAuthParams{
+	// Используем Direct Auth из oauth пакета vksdk
+	auth, err := oauth.DirectAuth(&oauth.Params{
 		Login:        login,
 		Password:     password,
 		ClientID:     VK_APP_ID,
@@ -134,9 +134,9 @@ func login() bool {
 		return false
 	}
 
-	accessToken = token.AccessToken
+	accessToken = auth.AccessToken
 	fmt.Println("✅ Авторизация успешна!")
-	fmt.Printf("Токен получен для пользователя ID: %d\n", token.UserID)
+	fmt.Printf("Токен получен для пользователя ID: %d\n", auth.UserID)
 	return true
 }
 
@@ -190,22 +190,41 @@ func searchCommunities() {
 		"count": maxResults,
 	}
 
-	resp, err := vk.Groups.Search(params)
+	// Используем прямой вызов API через Request
+	resp, err := vk.Request("groups.search", params)
 	if err != nil {
 		fmt.Printf("❌ Ошибка VK API: %v\n", err)
 		return
 	}
 
-	fmt.Printf("\n✅ Найдено %d сообществ:\n\n", len(resp.Items))
+	// Парсим ответ
+	var result struct {
+		Count int `json:"count"`
+		Items []struct {
+			ID          int    `json:"id"`
+			Name        string `json:"name"`
+			ScreenName  string `json:"screen_name"`
+			Members     int    `json:"member_count"`
+			Description string `json:"description"`
+			Site        string `json:"site"`
+		} `json:"items"`
+	}
+
+	if err := json.Unmarshal(resp.Response, &result); err != nil {
+		fmt.Printf("❌ Ошибка парсинга ответа: %v\n", err)
+		return
+	}
+
+	fmt.Printf("\n✅ Найдено %d сообществ:\n\n", len(result.Items))
 
 	// Конвертируем результаты в наш формат
-	communities := make([]Community, len(resp.Items))
-	for i, group := range resp.Items {
+	communities := make([]Community, len(result.Items))
+	for i, group := range result.Items {
 		communities[i] = Community{
 			ID:          group.ID,
 			Name:        group.Name,
 			ScreenName:  group.ScreenName,
-			Members:     group.MembersCount,
+			Members:     group.Members,
 			Description: group.Description,
 			Site:        group.Site,
 		}
