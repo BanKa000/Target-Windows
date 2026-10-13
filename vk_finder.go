@@ -1,15 +1,20 @@
 package main
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
+	"github.com/SevereCloud/vksdk/v3/api"
+	"github.com/SevereCloud/vksdk/v3/auth"
 	"github.com/xuri/excelize/v2"
 )
 
@@ -99,84 +104,35 @@ func login() bool {
 		return validateToken()
 	}
 
+	reader := bufio.NewReader(os.Stdin)
+
 	fmt.Print("Логин (телефон или email): ")
-	var login string
-	fmt.Scanln(&login)
+	login, _ := reader.ReadString('\n')
+	login = strings.TrimSpace(login)
 
 	fmt.Print("Пароль: ")
-	var password string
-	fmt.Scanln(&password)
+	password, _ := reader.ReadString('\n')
+	password = strings.TrimSpace(password)
 
-	// Direct Auth через официальное приложение VK
-	params := url.Values{}
-	params.Set("client_id", VK_APP_ID)
-	params.Set("username", login)
-	params.Set("password", password)
-	params.Set("v", VK_API_VERSION)
-	params.Set("2fa_supported", "1")
-	params.Set("scope", "offline")
+	fmt.Println("\n⏳ Выполняется авторизация через VK API...")
 
-	resp, err := http.PostForm("https://oauth.vk.com/token", params)
+	// Используем библиотеку vksdk для Direct Auth
+	client := auth.NewClient(VK_APP_ID)
+
+	token, err := client.Login(login, password)
 	if err != nil {
-		fmt.Printf("Ошибка подключения: %v\n", err)
-		return false
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var result struct {
-		AccessToken string `json:"access_token"`
-		Error       string `json:"error"`
-		ErrorDesc   string `json:"error_description"`
-		NeedCaptcha bool   `json:"need_captcha"`
-		CaptchaSid  string `json:"captcha_sid"`
-		ValidationSid string `json:"validation_sid"`
-		PhoneMask   string `json:"phone_mask"`
-		RedirectUri string `json:"redirect_uri"`
-	}
-
-	if err := json.Unmarshal(body, &result); err != nil {
-		fmt.Printf("Ошибка парсинга ответа: %v\n", err)
+		fmt.Printf("❌ Ошибка авторизации: %v\n", err)
+		fmt.Println("\nВозможные причины:")
+		fmt.Println("- Неверный логин или пароль")
+		fmt.Println("- Включена двухфакторная аутентификация")
+		fmt.Println("- VK заблокировал вход (попробуйте позже)")
+		fmt.Println("- Используйте опцию '2' для ввода токена вручную")
 		return false
 	}
 
-	// Обработка 2FA
-	if result.ValidationSid != "" {
-		fmt.Println("\n⚠️  Требуется двухфакторная авторизация")
-		fmt.Print("Введите код из приложения VK: ")
-		var code string
-		fmt.Scanln(&code)
-
-		// Повторная попытка с кодом
-		params.Set("code", code)
-		resp2, err := http.PostForm("https://oauth.vk.com/token", params)
-		if err != nil {
-			fmt.Printf("Ошибка подключения: %v\n", err)
-			return false
-		}
-		defer resp2.Body.Close()
-
-		body2, _ := io.ReadAll(resp2.Body)
-		if err := json.Unmarshal(body2, &result); err != nil {
-			fmt.Printf("Ошибка парсинга ответа: %v\n", err)
-			return false
-		}
-	}
-
-	if result.Error != "" {
-		fmt.Printf("Ошибка авторизации: %s - %s\n", result.Error, result.ErrorDesc)
-		if result.NeedCaptcha {
-			fmt.Println("VK запрашивает капчу. Попробуйте позже или используйте токен.")
-		}
-		if result.ValidationSid != "" {
-			fmt.Println("Неверный код 2FA. Попробуйте снова.")
-		}
-		return false
-	}
-
-	accessToken = result.AccessToken
+	accessToken = token.AccessToken
 	fmt.Println("✅ Авторизация успешна!")
+	fmt.Printf("Токен получен для пользователя ID: %d\n", token.UserID)
 	return true
 }
 
@@ -197,53 +153,61 @@ func validateToken() bool {
 }
 
 func searchCommunities() {
+	reader := bufio.NewReader(os.Stdin)
+	
 	fmt.Print("\nВведите поисковый запрос: ")
-	var query string
-	fmt.Scanln(&query)
+	query, _ := reader.ReadString('\n')
+	query = strings.TrimSpace(query)
 
 	fmt.Print("Максимальное количество результатов (10-500): ")
-	var maxResults int
-	fmt.Scanln(&maxResults)
-
-	if maxResults < 10 {
-		maxResults = 10
+	var maxResultsStr string
+	maxResultsStr, _ = reader.ReadString('\n')
+	maxResultsStr = strings.TrimSpace(maxResultsStr)
+	
+	maxResults := 50
+	if n, err := strconv.Atoi(maxResultsStr); err == nil {
+		if n < 10 {
+			maxResults = 10
+		} else if n > 500 {
+			maxResults = 500
+		} else {
+			maxResults = n
+		}
 	}
-	if maxResults > 500 {
-		maxResults = 500
+
+	fmt.Println("\n⏳ Поиск сообществ...")
+
+	// Используем библиотеку vksdk для API запросов
+	vk := api.NewVK(accessToken)
+
+	params := api.Params{
+		"q":     query,
+		"type":  "group",
+		"count": maxResults,
 	}
 
-	fmt.Println("\nПоиск сообществ...")
-
-	params := url.Values{}
-	params.Set("access_token", accessToken)
-	params.Set("q", query)
-	params.Set("type", "group")
-	params.Set("count", fmt.Sprintf("%d", maxResults))
-	params.Set("v", VK_API_VERSION)
-
-	resp, err := http.Get("https://api.vk.com/method/groups.search?" + params.Encode())
+	resp, err := vk.Groups.Search(params)
 	if err != nil {
-		fmt.Printf("Ошибка: %v\n", err)
-		return
-	}
-	defer resp.Body.Close()
-
-	body, _ := io.ReadAll(resp.Body)
-
-	var vkResp VKResponse
-	if err := json.Unmarshal(body, &vkResp); err != nil {
-		fmt.Printf("Ошибка парсинга: %v\n", err)
+		fmt.Printf("❌ Ошибка VK API: %v\n", err)
 		return
 	}
 
-	if vkResp.Error != nil {
-		fmt.Printf("Ошибка VK API: %s\n", vkResp.Error.ErrorMsg)
-		return
+	fmt.Printf("\n✅ Найдено %d сообществ:\n\n", len(resp.Items))
+
+	// Конвертируем результаты в наш формат
+	communities := make([]Community, len(resp.Items))
+	for i, group := range resp.Items {
+		communities[i] = Community{
+			ID:          group.ID,
+			Name:        group.Name,
+			ScreenName:  group.ScreenName,
+			Members:     group.MembersCount,
+			Description: group.Description,
+			Site:        group.Site,
+		}
 	}
 
-	fmt.Printf("\nНайдено %d сообществ:\n\n", len(vkResp.Response.Items))
-
-	for i, community := range vkResp.Response.Items {
+	for i, community := range communities {
 		fmt.Printf("%d. %s\n", i+1, community.Name)
 		fmt.Printf("   URL: https://vk.com/%s\n", community.ScreenName)
 		fmt.Printf("   Участников: %d\n", community.Members)
@@ -258,7 +222,7 @@ func searchCommunities() {
 	}
 
 	// Сохраняем результаты для экспорта
-	saveResults(vkResp.Response.Items)
+	saveResults(communities)
 }
 
 var lastResults []Community
