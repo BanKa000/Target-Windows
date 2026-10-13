@@ -56,7 +56,7 @@ run_go.bat
 
 **1. Логин/пароль (рекомендуется)**
 - Введите телефон/email и пароль
-- Программа использует библиотеку **vksdk** для Direct Auth
+- Программа использует `vksdk.DirectAuth` из библиотеки vksdk/v3
 - Используется официальное приложение VK для Android (app_id=2274003)
 - Не требует client_secret или регистрации приложения в VK Dev
 - Автоматически обрабатывает ошибки и 2FA
@@ -100,8 +100,11 @@ run_go.bat
 
 **Ошибка "invalid_client":**
 - Эта ошибка больше не должна возникать
-- Программа использует Direct Auth через официальное приложение VK для Android (app_id=2274003)
+- Программа использует `vksdk.DirectAuth` из библиотеки vksdk/v3
+- Используется официальное приложение VK для Android (app_id=2274003)
 - Не требует client_secret или регистрации приложения в VK Dev
+- Если ошибка всё же возникает, выполните `install_go.bat` для переустановки зависимостей
+- Подробная инструкция: [FIX_INVALID_CLIENT.md](FIX_INVALID_CLIENT.md)
 
 **Капча:**
 - VK запрашивает капчу при частых запросах
@@ -128,11 +131,11 @@ go build -o vk_finder.exe vk_finder.go
 
 ## Как это работает
 
-1. **Авторизация**: Используется библиотека **vksdk** для Direct Auth
+1. **Авторизация**: Используется `vksdk.DirectAuth` из библиотеки vksdk/v3
    - Приложение VK для Android (app_id=2274003)
    - Не требует client_secret или регистрации приложения
    - Автоматическая обработка ошибок и 2FA
-   - Метод `auth.NewClient(appID).Login(login, password)`
+   - Метод `vksdk.DirectAuth(&vksdk.DirectAuthParams{...})`
 2. **Поиск**: Запрос к VK API через `api.NewVK(token).Groups.Search()`
 3. **Парсинг**: Библиотека vksdk автоматически парсит JSON ответы
 4. **Экспорт**: Создание Excel файла через excelize

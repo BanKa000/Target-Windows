@@ -13,15 +13,15 @@ import (
 	"strings"
 	"time"
 
+	"github.com/SevereCloud/vksdk/v3"
 	"github.com/SevereCloud/vksdk/v3/api"
-	"github.com/SevereCloud/vksdk/v3/auth"
 	"github.com/xuri/excelize/v2"
 )
 
 // VK API конфигурация
 const (
 	VK_API_VERSION = "5.199"
-	VK_APP_ID      = "2274003" // VK для Android (официальное приложение)
+	VK_APP_ID      = 2274003 // VK для Android (официальное приложение)
 )
 
 // Структуры данных
@@ -116,10 +116,14 @@ func login() bool {
 
 	fmt.Println("\n⏳ Выполняется авторизация через VK API...")
 
-	// Используем библиотеку vksdk для Direct Auth
-	client := auth.NewClient(VK_APP_ID)
-
-	token, err := client.Login(login, password)
+	// Используем Direct Auth из vksdk
+	token, err := vksdk.DirectAuth(&vksdk.DirectAuthParams{
+		Login:        login,
+		Password:     password,
+		ClientID:     VK_APP_ID,
+		ClientSecret: "", // Для официальных приложений VK не требуется
+		Scope:        api.ScopeOffline,
+	})
 	if err != nil {
 		fmt.Printf("❌ Ошибка авторизации: %v\n", err)
 		fmt.Println("\nВозможные причины:")
