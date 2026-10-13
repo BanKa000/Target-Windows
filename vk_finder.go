@@ -23,7 +23,7 @@ import (
 // VK API конфигурация
 const (
 	VK_API_VERSION = "5.199"
-	VK_APP_ID      = 2274003 // VK для Android (официальное приложение)
+	VK_APP_ID      = 2685278 // Kate Mobile (поддерживает OAuth)
 )
 
 // Структуры данных
