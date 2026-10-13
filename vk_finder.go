@@ -16,7 +16,7 @@ import (
 // VK API конфигурация
 const (
 	VK_API_VERSION = "5.199"
-	VK_APP_ID      = "2685278" // Standalone приложение
+	VK_APP_ID      = "2274003" // VK для Android (официальное приложение)
 )
 
 // Структуры данных
@@ -107,10 +107,9 @@ func login() bool {
 	var password string
 	fmt.Scanln(&password)
 
-	// Прямой запрос к VK API для получения токена
+	// Direct Auth через официальное приложение VK
 	params := url.Values{}
 	params.Set("client_id", VK_APP_ID)
-	params.Set("client_secret", "") // Для standalone приложений
 	params.Set("username", login)
 	params.Set("password", password)
 	params.Set("v", VK_API_VERSION)
@@ -131,6 +130,10 @@ func login() bool {
 		Error       string `json:"error"`
 		ErrorDesc   string `json:"error_description"`
 		NeedCaptcha bool   `json:"need_captcha"`
+		CaptchaSid  string `json:"captcha_sid"`
+		ValidationSid string `json:"validation_sid"`
+		PhoneMask   string `json:"phone_mask"`
+		RedirectUri string `json:"redirect_uri"`
 	}
 
 	if err := json.Unmarshal(body, &result); err != nil {
@@ -138,10 +141,36 @@ func login() bool {
 		return false
 	}
 
+	// Обработка 2FA
+	if result.ValidationSid != "" {
+		fmt.Println("\n⚠️  Требуется двухфакторная авторизация")
+		fmt.Print("Введите код из приложения VK: ")
+		var code string
+		fmt.Scanln(&code)
+
+		// Повторная попытка с кодом
+		params.Set("code", code)
+		resp2, err := http.PostForm("https://oauth.vk.com/token", params)
+		if err != nil {
+			fmt.Printf("Ошибка подключения: %v\n", err)
+			return false
+		}
+		defer resp2.Body.Close()
+
+		body2, _ := io.ReadAll(resp2.Body)
+		if err := json.Unmarshal(body2, &result); err != nil {
+			fmt.Printf("Ошибка парсинга ответа: %v\n", err)
+			return false
+		}
+	}
+
 	if result.Error != "" {
 		fmt.Printf("Ошибка авторизации: %s - %s\n", result.Error, result.ErrorDesc)
 		if result.NeedCaptcha {
 			fmt.Println("VK запрашивает капчу. Попробуйте позже или используйте токен.")
+		}
+		if result.ValidationSid != "" {
+			fmt.Println("Неверный код 2FA. Попробуйте снова.")
 		}
 		return false
 	}
