@@ -56,7 +56,7 @@ run_go.bat
 
 **1. Логин/пароль (рекомендуется)**
 - Введите телефон/email и пароль
-- Программа использует `oauth.DirectAuth` из пакета `github.com/SevereCloud/vksdk/v3/oauth`
+- Программа использует прямой HTTP-запрос к `https://oauth.vk.com/token`
 - Используется официальное приложение VK для Android (app_id=2274003)
 - Не требует client_secret или регистрации приложения в VK Dev
 - Автоматически обрабатывает ошибки и 2FA
@@ -100,7 +100,7 @@ run_go.bat
 
 **Ошибка "invalid_client":**
 - Эта ошибка больше не должна возникать
-- Программа использует `oauth.DirectAuth` из пакета `github.com/SevereCloud/vksdk/v3/oauth`
+- Программа использует прямой HTTP-запрос к `https://oauth.vk.com/token`
 - Используется официальное приложение VK для Android (app_id=2274003)
 - Не требует client_secret или регистрации приложения в VK Dev
 - Если ошибка всё же возникает, выполните `install_go.bat` для переустановки зависимостей
@@ -131,16 +131,16 @@ go build -o vk_finder.exe vk_finder.go
 
 ## Как это работает
 
-1. **Авторизация**: Используется `oauth.DirectAuth` из пакета `github.com/SevereCloud/vksdk/v3/oauth`
+1. **Авторизация**: Прямой HTTP-запрос к `https://oauth.vk.com/token`
    - Приложение VK для Android (app_id=2274003)
    - Не требует client_secret или регистрации приложения
    - Автоматическая обработка ошибок и 2FA
-   - Метод `oauth.DirectAuth(&oauth.Params{...})`
+   - Функция `getVKToken()` выполняет POST-запрос с параметрами логина/пароля
 2. **Поиск**: Прямой вызов API через `vk.Request("groups.search", params)`
 3. **Парсинг**: JSON ответ парсится вручную через `json.Unmarshal`
 4. **Экспорт**: Создание Excel файла через excelize
 
-**Никаких браузеров!** Программа работает напрямую с VK API через библиотеку vksdk.
+**Никаких браузеров!** Программа работает напрямую с VK API через HTTP-запросы и библиотеку vksdk.
 
 ## Структура проекта
 

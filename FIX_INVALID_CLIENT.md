@@ -2,11 +2,11 @@
 
 ## Проблема
 
-Ошибка `invalid_client - client_secret is undefined` возникала из-за использования несуществующего пакета `github.com/SevereCloud/vksdk/v3/auth`. В v3 SDK структура изменилась, и DirectAuth находится в пакете `oauth`.
+Ошибка `invalid_client - client_secret is undefined` возникала из-за использования несуществующего пакета `github.com/SevereCloud/vksdk/v3/auth`. В v3 SDK структура изменилась, и DirectAuth больше не поддерживается напрямую в SDK.
 
 ## Решение
 
-Исправлен код авторизации для использования правильного метода `vksdk.DirectAuth` из библиотеки vksdk/v3.
+Исправлен код авторизации для использования прямого HTTP-запроса к `https://oauth.vk.com/token` без использования сторонних пакетов oauth.
 
 ## Что было изменено
 
@@ -16,7 +16,7 @@
 ```go
 import (
     "github.com/SevereCloud/vksdk/v3/api"
-    "github.com/SevereCloud/vksdk/v3/auth"  // ❌ Несуществующий пакет
+    "github.com/SevereCloud/vksdk/v3/oauth" // ❌ Пакет oauth также вынесен
     "github.com/xuri/excelize/v2"
 )
 ```
@@ -25,8 +25,8 @@ import (
 ```go
 import (
     "github.com/SevereCloud/vksdk/v3/api"
-    "github.com/SevereCloud/vksdk/v3/oauth" // ✅ Правильный пакет для DirectAuth
     "github.com/xuri/excelize/v2"
+    // oauth пакет удалён, используется прямой HTTP-запрос
 )
 ```
 
@@ -34,19 +34,35 @@ import (
 
 **Было:**
 ```go
-client := auth.NewClient(VK_APP_ID)
-token, err := client.Login(login, password)
-```
-
-**Стало:**
-```go
 auth, err := oauth.DirectAuth(&oauth.Params{
     Login:        login,
     Password:     password,
     ClientID:     VK_APP_ID,
-    ClientSecret: "", // Для официальных приложений VK не требуется
+    ClientSecret: "",
     Scope:        api.ScopeOffline,
 })
+```
+
+**Стало:**
+```go
+// Прямой HTTP-запрос для получения токена
+func getVKToken(login, password, clientID string) (string, int64, error) {
+    data := url.Values{
+        "grant_type": {"password"},
+        "client_id":  {clientID},
+        "username":   {login},
+        "password":   {password},
+        "scope":      {"offline,friends,groups"},
+        "v":          {VK_API_VERSION},
+    }
+
+    resp, err := http.PostForm("https://oauth.vk.com/token", data)
+    // ... обработка ответа
+    return tokenResp.AccessToken, tokenResp.UserID, nil
+}
+
+// Использование:
+token, userID, err := getVKToken(login, password, fmt.Sprintf("%d", VK_APP_ID))
 ```
 
 ### 3. Тип VK_APP_ID (vk_finder.go)
@@ -104,10 +120,11 @@ run_go.bat
 ## Преимущества нового метода
 
 ✅ **Не требует client_secret** - используется официальное приложение VK  
-✅ **Автоматическая обработка 2FA** - библиотека сама запрашивает код  
-✅ **Правильная работа с VK API** - используется `oauth.DirectAuth` из vksdk/v3  
+✅ **Прямой HTTP-запрос** - не зависит от сторонних пакетов oauth  
+✅ **Полный контроль** - можно обрабатывать все ошибки и 2FA  
 ✅ **Нет ошибок "invalid_client"** - правильная реализация Direct Auth  
 ✅ **Прямой вызов API** - используется `vk.Request()` вместо устаревших методов  
+✅ **Минимальные зависимости** - только api и excelize  
 
 ## Если возникли проблемы
 
@@ -130,11 +147,11 @@ go build -o vk_finder.exe vk_finder.go
 ## Технические детали
 
 - **Библиотека**: github.com/SevereCloud/vksdk/v3 v3.0.0
-- **Пакет авторизации**: `github.com/SevereCloud/vksdk/v3/oauth`
-- **Метод авторизации**: `oauth.DirectAuth`
+- **Метод авторизации**: Прямой HTTP POST-запрос к `https://oauth.vk.com/token`
 - **App ID**: 2274003 (VK для Android)
 - **Client Secret**: не требуется для официальных приложений
 - **Метод поиска**: `vk.Request("groups.search", params)`
+- **Функция авторизации**: `getVKToken(login, password, clientID)`
 
 ## Документация
 
@@ -144,4 +161,4 @@ go build -o vk_finder.exe vk_finder.go
 ---
 
 **Дата исправления**: 2026  
-**Версия**: 1.2 (обновлено для v3 SDK - oauth.DirectAuth)
+**Версия**: 1.3 (обновлено для v3 SDK - прямой HTTP-запрос)
