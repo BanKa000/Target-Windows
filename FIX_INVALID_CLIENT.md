@@ -87,7 +87,15 @@ resp, err := vk.Groups.Search(params)
 **Стало:**
 ```go
 resp, err := vk.Request("groups.search", params)
-// Парсинг ответа через json.Unmarshal
+// resp - это []byte, парсим через json.Unmarshal
+var apiResponse struct {
+    Response struct {
+        Count int `json:"count"`
+        Items []struct { ... } `json:"items"`
+    } `json:"response"`
+    Error *struct { ... } `json:"error"`
+}
+json.Unmarshal(resp, &apiResponse)
 ```
 
 ## Как использовать

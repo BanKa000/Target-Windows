@@ -232,23 +232,37 @@ func searchCommunities() {
 		return
 	}
 
-	// Парсим ответ
-	var result struct {
-		Count int `json:"count"`
-		Items []struct {
-			ID          int    `json:"id"`
-			Name        string `json:"name"`
-			ScreenName  string `json:"screen_name"`
-			Members     int    `json:"member_count"`
-			Description string `json:"description"`
-			Site        string `json:"site"`
-		} `json:"items"`
+	// Парсим ответ VK API
+	var apiResponse struct {
+		Response struct {
+			Count int `json:"count"`
+			Items []struct {
+				ID          int    `json:"id"`
+				Name        string `json:"name"`
+				ScreenName  string `json:"screen_name"`
+				Members     int    `json:"member_count"`
+				Description string `json:"description"`
+				Site        string `json:"site"`
+			} `json:"items"`
+		} `json:"response"`
+		Error *struct {
+			ErrorCode int    `json:"error_code"`
+			ErrorMsg  string `json:"error_msg"`
+		} `json:"error"`
 	}
 
-	if err := json.Unmarshal(resp.Response, &result); err != nil {
+	if err := json.Unmarshal(resp, &apiResponse); err != nil {
 		fmt.Printf("❌ Ошибка парсинга ответа: %v\n", err)
 		return
 	}
+
+	// Проверяем наличие ошибки в ответе
+	if apiResponse.Error != nil {
+		fmt.Printf("❌ Ошибка VK API: %s\n", apiResponse.Error.ErrorMsg)
+		return
+	}
+
+	result := apiResponse.Response
 
 	fmt.Printf("\n✅ Найдено %d сообществ:\n\n", len(result.Items))
 
