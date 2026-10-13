@@ -144,10 +144,16 @@ class ApiLoginThread(QThread):
             vk_session = vk_api.VkApi(
                 login=self.login,
                 password=self.password,
-                app_id=2685278,
-                auth_token_code=self.code if self.code else None
+                app_id=2685278
             )
-            vk_session.auth(token_only=False)
+            
+            # Если есть код 2FA, передаём его через функцию
+            if self.code:
+                def auth_handler():
+                    return self.code, True
+                vk_session.auth_handler = auth_handler
+            
+            vk_session.auth()
             
             token = vk_session.token['access_token']
             token_file = Path(USER_DATA_DIR) / 'api_token.txt'
