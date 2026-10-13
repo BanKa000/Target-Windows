@@ -52,7 +52,7 @@ echo Готово.
 echo.
 echo [6/6] Переустановка браузеров Playwright...
 playwright uninstall --all 2>nul
-playwright install chromium
+python -m playwright install chromium
 if %errorlevel% neq 0 (
     echo Ошибка установки браузеров!
     pause

@@ -77,7 +77,17 @@ clean_and_reinstall.bat
 check_auth.bat
 ```
 
-Этот скрипт проверит файл `vk_finder.py` и покажет, есть ли проблемные элементы.
+Этот скрипт проверит:
+- Наличие вызова `vk_api.VkApi(login=..., password=...)`
+- Наличие вызова `vk_session.auth()`
+- Привязку кнопки к функции `start_api_login`
+- Отсутствие проблемных элементов (auth_token_code, QWebEngine, window.init)
+
+**Правильная структура кода:**
+```python
+vk_session = vk_api.VkApi(login=self.login, password=self.password)
+vk_session.auth()
+```
 
 ### Другие проблемы
 
