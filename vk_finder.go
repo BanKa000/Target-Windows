@@ -5,10 +5,13 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"os"
+	"os/exec"
 	"regexp"
+	"runtime"
 	"strconv"
 	"strings"
 	"time"
@@ -48,46 +51,134 @@ type VKResponse struct {
 	} `json:"error"`
 }
 
-type TokenResponse struct {
-	AccessToken string `json:"access_token"`
-	UserID      int64  `json:"user_id"`
-	Error       string `json:"error"`
-	ErrorDesc   string `json:"error_description"`
+// openBrowser открывает URL в системном браузере
+func openBrowser(url string) error {
+	var cmd string
+	var args []string
+
+	switch runtime.GOOS {
+	case "windows":
+		cmd = "cmd"
+		args = []string{"/c", "start", url}
+	case "darwin": // macOS
+		cmd = "open"
+		args = []string{url}
+	case "linux":
+		cmd = "xdg-open"
+		args = []string{url}
+	default:
+		return fmt.Errorf("неподдерживаемая операционная система")
+	}
+
+	return exec.Command(cmd, args...).Start()
 }
 
-// getVKToken выполняет прямой HTTP-запрос для получения токена VK
-func getVKToken(login, password, clientID string) (string, int64, error) {
-	data := url.Values{
-		"grant_type": {"password"},
-		"client_id":  {clientID},
-		"username":   {login},
-		"password":   {password},
-		"scope":      {"offline,friends,groups"},
-		"v":          {VK_API_VERSION},
-	}
-
-	resp, err := http.PostForm("https://oauth.vk.com/token", data)
+// getVKTokenViaBrowser использует Implicit Flow через браузер
+func getVKTokenViaBrowser(clientID int) (string, int64, error) {
+	// Находим свободный порт
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
+		return "", 0, fmt.Errorf("не удалось найти свободный порт: %v", err)
+	}
+	port := listener.Addr().(*net.TCPAddr).Port
+	listener.Close()
+
+	redirectURI := fmt.Sprintf("http://127.0.0.1:%d/callback", port)
+
+	// Создаём канал для получения токена
+	tokenChan := make(chan string, 1)
+	errorChan := make(chan error, 1)
+
+	// Запускаем локальный HTTP сервер
+	server := &http.Server{
+		Addr: fmt.Sprintf("127.0.0.1:%d", port),
+		Handler: http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			// Извлекаем токен из URL (fragment)
+			fragment := r.URL.Fragment
+			if fragment == "" {
+				// VK может передать токен в query параметрах
+				fragment = r.URL.RawQuery
+			}
+
+			// Парсим параметры из fragment/query
+			params, _ := url.ParseQuery(fragment)
+			accessToken := params.Get("access_token")
+			userID := params.Get("user_id")
+
+			if accessToken == "" {
+				errorChan <- fmt.Errorf("токен не получен")
+				http.Error(w, "Ошибка: токен не получен", http.StatusBadRequest)
+				return
+			}
+
+			// Отправляем успешный ответ
+			w.Header().Set("Content-Type", "text/html; charset=utf-8")
+			w.Write([]byte(`
+				<!DOCTYPE html>
+				<html>
+				<head>
+					<meta charset="UTF-8">
+					<title>Авторизация успешна</title>
+					<style>
+						body { font-family: Arial, sans-serif; text-align: center; padding: 50px; }
+						.success { color: green; font-size: 24px; }
+					</style>
+				</head>
+				<body>
+					<div class="success">✅ Авторизация успешна!</div>
+					<p>Можете закрыть это окно и вернуться в программу.</p>
+				</body>
+				</html>
+			`))
+
+			// Отправляем токен в канал
+			tokenChan <- accessToken + "|" + userID
+		}),
+	}
+
+	go func() {
+		if err := server.ListenAndServe(); err != http.ErrServerClosed {
+			errorChan <- err
+		}
+	}()
+
+	// Формируем URL для авторизации
+	authURL := fmt.Sprintf(
+		"https://oauth.vk.com/authorize?client_id=%d&redirect_uri=%s&display=page&scope=offline,groups&response_type=token&v=%s",
+		clientID,
+		url.QueryEscape(redirectURI),
+		VK_API_VERSION,
+	)
+
+	// Открываем браузер
+	fmt.Println("\n🌐 Открываю браузер для авторизации...")
+	if err := openBrowser(authURL); err != nil {
+		server.Close()
+		return "", 0, fmt.Errorf("не удалось открыть браузер: %v\nОткройте URL вручную: %s", err, authURL)
+	}
+
+	fmt.Println("✅ Браузер открыт. Авторизуйтесь в VK.")
+	fmt.Println("⏳ Ожидаю получения токена...")
+
+	// Ждём токен с таймаутом
+	select {
+	case result := <-tokenChan:
+		server.Close()
+		parts := strings.Split(result, "|")
+		if len(parts) != 2 {
+			return "", 0, fmt.Errorf("неверный формат токена")
+		}
+		userID, _ := strconv.ParseInt(parts[1], 10, 64)
+		return parts[0], userID, nil
+
+	case err := <-errorChan:
+		server.Close()
 		return "", 0, err
-	}
-	defer resp.Body.Close()
 
-	body, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return "", 0, err
+	case <-time.After(5 * time.Minute):
+		server.Close()
+		return "", 0, fmt.Errorf("таймаут: авторизация не завершена за 5 минут")
 	}
-
-	var tokenResp TokenResponse
-	if err := json.Unmarshal(body, &tokenResp); err != nil {
-		return "", 0, fmt.Errorf("ошибка парсинга ответа: %v", err)
-	}
-
-	// Проверяем наличие ошибки в ответе
-	if tokenResp.Error != "" {
-		return "", 0, fmt.Errorf("VK API error: %s - %s", tokenResp.Error, tokenResp.ErrorDesc)
-	}
-
-	return tokenResp.AccessToken, tokenResp.UserID, nil
 }
 
 // Глобальные переменные
@@ -132,7 +223,7 @@ func main() {
 
 func login() bool {
 	fmt.Println("\n--- Авторизация ВКонтакте ---")
-	fmt.Println("1. Войти по логину/паролю")
+	fmt.Println("1. Войти через браузер (рекомендуется)")
 	fmt.Println("2. Использовать существующий токен")
 	fmt.Print("Выберите (1-2): ")
 
@@ -145,26 +236,15 @@ func login() bool {
 		return validateToken()
 	}
 
-	reader := bufio.NewReader(os.Stdin)
+	fmt.Println("\n⏳ Выполняется авторизация через браузер...")
 
-	fmt.Print("Логин (телефон или email): ")
-	login, _ := reader.ReadString('\n')
-	login = strings.TrimSpace(login)
-
-	fmt.Print("Пароль: ")
-	password, _ := reader.ReadString('\n')
-	password = strings.TrimSpace(password)
-
-	fmt.Println("\n⏳ Выполняется авторизация через VK API...")
-
-	// Используем прямой HTTP-запрос для получения токена
-	token, userID, err := getVKToken(login, password, fmt.Sprintf("%d", VK_APP_ID))
+	// Используем Implicit Flow через браузер
+	token, userID, err := getVKTokenViaBrowser(VK_APP_ID)
 	if err != nil {
 		fmt.Printf("❌ Ошибка авторизации: %v\n", err)
 		fmt.Println("\nВозможные причины:")
-		fmt.Println("- Неверный логин или пароль")
-		fmt.Println("- Включена двухфакторная аутентификация")
-		fmt.Println("- VK заблокировал вход (попробуйте позже)")
+		fmt.Println("- Браузер не открылся (попробуйте открыть URL вручную)")
+		fmt.Println("- Авторизация не завершена")
 		fmt.Println("- Используйте опцию '2' для ввода токена вручную")
 		return false
 	}
