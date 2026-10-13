@@ -6,7 +6,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"regexp"
 	"strings"
 	"time"
@@ -255,13 +254,21 @@ func exportToExcel() {
 
 	// Заголовки
 	headers := []string{"№", "Название", "Ссылка", "Участники", "Описание", "Сайт", "Телефон", "Email", "Город"}
+	
+	// Создаём стиль для заголовков
+	styleID, err := f.NewStyle(&excelize.Style{
+		Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
+		Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#4C75A3"}},
+	})
+	if err != nil {
+		fmt.Printf("Ошибка создания стиля: %v\n", err)
+		return
+	}
+	
 	for i, header := range headers {
 		cell := fmt.Sprintf("%c1", 'A'+i)
 		f.SetCellValue(sheet, cell, header)
-		f.SetCellStyle(sheet, cell, cell, &excelize.Style{
-			Font: &excelize.Font{Bold: true, Color: "#FFFFFF"},
-			Fill: excelize.Fill{Type: "pattern", Pattern: 1, Color: []string{"#4C75A3"}},
-		})
+		f.SetCellStyle(sheet, cell, cell, styleID)
 	}
 
 	// Данные
